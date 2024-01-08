@@ -226,7 +226,7 @@ print("  READING INPUT DATA  ".center(80, "*"))
 print("".center(80, "*") + "\n")
 
 reading_head_start = time.time()
-time.sleep(internal_time_delay)
+# time.sleep(internal_time_delay)
 
 
 aquifer_layer_names = [
@@ -235,8 +235,7 @@ aquifer_layer_names = [
 compactable_aquifers_names = [
     name
     for name, switch in layer_compaction_switch.items()
-    if name in aquifer_layer_names
-    if switch == True
+    if name in aquifer_layer_names and switch
 ]
 aquitard_locations = [
     layer_names.index(name)
@@ -245,178 +244,201 @@ aquitard_locations = [
 ]
 aquifers_above_aquitards = [layer_names[i - 1] for i in aquitard_locations]
 aquifers_below_aquitards = [layer_names[i + 1] for i in aquitard_locations]
+
 all_aquifers_needing_head_data = list(
     set(
         aquifers_below_aquitards + aquifers_above_aquitards + compactable_aquifers_names
     )
 )
+
 dt_headseries = {}
+
 print(
-    "Preparing to read in head data. Aquifers for which head data is required are: "
-    + ", ".join(map(str, all_aquifers_needing_head_data))
-    + "."
+    f"Preparing to read in head data. Aquifers for which head data is required are: {', '.join(map(str, all_aquifers_needing_head_data))}."
 )
+
 if len(all_aquifers_needing_head_data) >= 0:
     # make input_data directory in the outdestination folder if it does not exist
-    os.makedirs(f"{outdestination}/input_data", exist_ok=True)
+    input_copy = os.path.normpath(os.path.join(outdestination, "input_data"))
+    os.makedirs(input_copy, exist_ok=True)
 
     head_data_files = read_parameter(
         "head_data_files", str, len(all_aquifers_needing_head_data), paramfilelines
     )
+
+    # create a copy of the head_data_files dictionary. values will be replaced by
+    # a numpy array of numeric dates and values from the csv file containing heads
     head_data = copy.deepcopy(head_data_files)
+
     for aquifer in all_aquifers_needing_head_data:
         fileloc = head_data_files[aquifer]
-        print(f"\tFile for {aquifer} specified as {fileloc}. Looking for file.")
-        if os.path.isfile(fileloc):
-            print(f"\t\tFile {fileloc} exists. Storing copy in output folder.")
-            print("\t\tReading in head time series.")
-            shutil.copy2(
-                fileloc, f"{outdestination}/input_data/{fileloc.split('/')[-1]}"
-            )
-            try:
-                data = pd.read_csv(fileloc, parse_dates=[0])
 
-            except Exception:
-                print(
-                    '\t\tReading head data error: terminal. Input file does not seem to be valid csv format. Format expected is two columns, date then measurement. Date should be "dd-MMM-YYYY".'
-                )
-                sys.exit(1)
+        print(f"File for {aquifer} specified as {fileloc}. Looking for file.")
 
-            try:
-                dates = matplotlib.dates.date2num(data.iloc[:, 0].values)
-            except Exception:
-                print(
-                    "\t\tPandas couldn't parse the date head. Going to try treating the date as a float. If it's not, things may fail from hereon."
-                )
-                dates = np.array([float(ting) for ting in data.iloc[:, 0].values])
-                if time_unit == "years":
-                    dates = 365 * dates
+        if not os.path.isfile(fileloc):
+            raise FileNotFoundError(f"Error reading head data. File {fileloc} not found.")
+        print(f"File {fileloc} exists. Storing copy in output folder.")
+        print("Reading in head time series.")
+            
+        # copy csv files to input_data folder in output directory
+        shutil.copy2(
+            fileloc, os.path.join(input_copy, os.path.basename(fileloc))
+        )
+        
+        # read groundwater level data from csv file
+        data = pd.read_csv(fileloc, parse_dates=[0])
+            
+        # TODO: need to understand why to convert dates to a number here...
+        #try:
+        #    dates = matplotlib.dates.date2num(data.iloc[:, 0].values)
+        #except Exception:
+        #    print(
+        #        "Pandas couldn't parse the date head. Going to try treating the date as a float. If it's not, things may fail from hereon."
+        #    )
+        #    dates = np.array([float(ting) for ting in data.iloc[:, 0].values])
+        #    if time_unit == "years":
+        #        dates = 365 * dates
 
-            data = data.iloc[:, 1].values
-            head_data[aquifer] = np.array([dates, data]).T
-            print(f"\t\tSuccessfully read in. Head data for {aquifer} printing now.")
-            print(head_data[aquifer])
-            dt_headseries[aquifer] = np.diff(head_data[aquifer][:, 0])[0]
-        else:
-            print(f"\t\tReading head data error: terminal. File {fileloc} not found.")
-            sys.exit(1)
+        #data = data.iloc[:, 1].values
+        #head_data[aquifer] = np.array([dates, data]).T
+        head_data[aquifer] = data
+        print(f"Successfully read in. Head data for {aquifer} printing now.")
+        print(head_data[aquifer])
+        dt_headseries[aquifer] = np.diff(head_data[aquifer].iloc[:, 0])[0]
 
-    print("\tReading head data complete.")
+    print("Reading head data complete.")
 else:
-    print("\tNo aquifers requiring head data; skipping reading head data.")
-starttimes = [
-    np.min(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
-]
+    print("No aquifers requiring head data; skipping reading head data.")
+
+# get the starting times for each aquifer layer
+#starttimes = [
+#    np.min(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
+#]
+starttimes = [head_data[aquifer].iloc[:,0].min() for aquifer in all_aquifers_needing_head_data]
 print(starttimes)
+
+# start time is the maximum for all aquifer layers
 starttime = np.max(starttimes)
-endtimes = [
-    np.max(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
-]
+
+# get ending times for each aquifer layer
+#endtimes = [
+#    np.max(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
+#]
+endtimes = [head_data[aquifer].iloc[:,0].max() for aquifer in all_aquifers_needing_head_data]
+
+# end time is the minimum for all aquifer layers
 endtime = np.min(endtimes)
 
-#print("CLIPPING HEAD TIMESERIES TO HAVE CONSISTENT START/END DATES ACROSS AQUIFERS.")
+print("CLIPPING HEAD TIMESERIES TO HAVE CONSISTENT START/END DATES ACROSS AQUIFERS.")
 #print(
-#    "\tLatest startdate found is %s and earliest end date is %s. These will be used as model start/end times."
-#    % (
-#        matplotlib.dates.num2date(starttime).strftime("%d-%b-%Y"),
-#        matplotlib.dates.num2date(endtime).strftime("%d-%b-%Y"),
-#    )
+#    f"Latest startdate found is {matplotlib.dates.num2date(starttime).strftime('%d-%b-%Y')} and earliest end date is {matplotlib.dates.num2date(endtime).strftime('%d-%b-%Y')}. These will be used as model start/end times."
 #)
-## Clip to have common starting date
-#print("Clipping input series to model starttime.")
-#if MODE == "resume":
-#    starttime = matplotlib.dates.date2num(resume_date)
-#    print(
-#        "\tHead startdate is resume date; clipping series accordingly to start at %s."
-#        % resume_date.strftime("%d-%b-%Y")
-#    )
+print(
+    f"Latest startdate found is {starttime.strftime('%d-%b-%Y')} and earliest end date is {endtime.strftime('%d-%b-%Y')}. These will be used as model start/end times."
+)
+# Clip to have common starting date
+print("Clipping input series to model starttime.")
+if MODE == "resume":
+    starttime = matplotlib.dates.date2num(resume_date)
+    print(
+        f"\tHead startdate is resume date; clipping series accordingly to start at {resume_date.strftime('%d-%b-%Y')}."
+    )
+
+
+for aquifer in all_aquifers_needing_head_data:
+    idx_to_keep = (head_data[aquifer].iloc[:, 0] >= starttime) & (
+        head_data[aquifer].iloc[:, 0] <= endtime
+    )
+    #datesnew = head_data[aquifer][:, 0][idx_to_keep]
+    #datanew = head_data[aquifer][:, 1][idx_to_keep]
+    #head_data[aquifer] = np.array([datesnew, datanew]).T
+    head_data[aquifer] = head_data[aquifer][idx_to_keep]
+
+print("Clipping done.")
+
+if MODE == "resume":
+    for aquifer in all_aquifers_needing_head_data:
+        if resume_head_value[aquifer] == "cst":
+            print(
+                f"Resume head value=cst. Setting head in aquifer layers to be constant at the value it was in {resume_date}."
+            )
+
+            print(f"Setting head in {aquifer} to be {head_data[aquifer][:, 1][0]:.2f}.")
+            head_data[aquifer][:, 1] = head_data[aquifer][:, 1][0]
+            print(head_data[aquifer])
+
+for aquifer in all_aquifers_needing_head_data:
+    #with open(
+    #    os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"),
+    #    "w+",
+    #) as myCsv:
+    #    csvWriter = csv.writer(myCsv, delimiter=",")
+    #    csvWriter.writerows(head_data[aquifer])
+    head_data[aquifer].to_csv(os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"), index=False)
+
+if overburden_stress_gwflow or overburden_stress_compaction:
+    for aquifer in all_aquifers_needing_head_data:
+        if aquifer == layer_names[0]:
+            print(
+                f"{aquifer} is the uppermost aquifer; therefore it is unconfined. Calculating overburden stress from changing water levels in this aquifer."
+            )
+            unconfined_aquifer_name = aquifer
+            overburden_dates = head_data[aquifer].iloc[:, 0]
+            overburden_data = [
+                specific_yield
+                * rho_w
+                * g
+                * (head_data[aquifer].iloc[i, 1] - head_data[aquifer].iloc[0, 1])
+                for i in range(len(head_data[aquifer]))
+            ]
+            overburden_df = pd.DataFrame({"Date": overburden_dates, "Overburden Stress": overburden_data})
+
+
+if overburden_stress_gwflow or overburden_stress_compaction:
+    print("Clipping overburden stress.")
+    idx_to_keep = (overburden_dates >= starttime) & (overburden_dates <= endtime)
+    #overburden_dates = overburden_dates[idx_to_keep]
+    #overburden_data = np.array(overburden_data)[idx_to_keep]
+    overburden_df = overburden_df[idx_to_keep]
+    print("Clipping done.")
+    
+    # plot overburden data
+    #plt.plot_date(overburden_dates, overburden_data)
+    plt.plot(overburden_df.iloc[:,0].to_numpy(), overburden_df.iloc[:,1].to_numpy())
+    plt.savefig(os.path.join(input_copy, "overburden_stress_series.png"))
+    
+    # write overburden stress data to csv
+    #with open(os.path.join(input_copy, "overburden_data.csv"), "w+") as myCsv:
+    #    csvWriter = csv.writer(myCsv, delimiter=",")
+    #    csvWriter.writerows([overburden_dates, overburden_data])
+    overburden_df.to_csv(os.path.join(input_copy, "overburden_data.csv"), index=False)
+    
+    print("Overburden stress calculated and saved in input_data.")
+
+effective_stress = {}
+
+# plot input head timeseries
+plt.figure(figsize=(18, 12))
+sns.set_style("darkgrid")
+sns.set_context("notebook")
+for aquifer in all_aquifers_needing_head_data:
+    #plt.plot_date(
+    #    head_data[aquifer][:, 0], head_data[aquifer][:, 1], label=aquifer
+    #0)
+    plt.plot(head_data[aquifer].iloc[:,0].to_numpy(), head_data[aquifer].iloc[:,1].to_numpy())
+plt.ylabel("Head (masl)")
+plt.legend()
+plt.savefig(os.path.join(input_copy, "input_head_timeseries.png"))
+plt.savefig(os.path.join(input_copy, "input_head_timeseries.pdf"))
+# plt.savefig(os.path.join(input_copy, "input_head_timeseries.svg"))
+plt.close()
+sns.set_style("white")
 #
+# reading_head_stop = time.time()
+# reading_head_time = reading_head_stop - reading_head_start
 #
-#for aquifer in all_aquifers_needing_head_data:
-#    idx_to_keep = (head_data[aquifer][:, 0] >= starttime) & (
-#        head_data[aquifer][:, 0] <= endtime
-#    )
-#    datesnew = head_data[aquifer][:, 0][idx_to_keep]
-#    datanew = head_data[aquifer][:, 1][idx_to_keep]
-#    head_data[aquifer] = np.array([datesnew, datanew]).T
-#print("Clipping done.")
-#
-#if MODE == "resume":
-#    for aquifer in all_aquifers_needing_head_data:
-#        if resume_head_value[aquifer] == "cst":
-#            print(
-#                "\tResume head value=cst. Setting head in aquifer layers to be constant at the value it was in %s."
-#                % resume_date
-#            )
-#            print(
-#                "Setting head in %s to be %.2f."
-#                % (aquifer, head_data[aquifer][:, 1][0])
-#            )
-#            head_data[aquifer][:, 1] = head_data[aquifer][:, 1][0]
-#            print(head_data[aquifer])
-#
-#for aquifer in all_aquifers_needing_head_data:
-#    with open(
-#        "%s/input_data/input_time_series_%s.csv"
-#        % (outdestination, aquifer.replace(" ", "_")),
-#        "w+",
-#    ) as myCsv:
-#        csvWriter = csv.writer(myCsv, delimiter=",")
-#        csvWriter.writerows(head_data[aquifer])
-#
-#if overburden_stress_gwflow or overburden_stress_compaction:
-#    for aquifer in all_aquifers_needing_head_data:
-#        if aquifer == layer_names[0]:
-#            print(
-#                "\t%s is the uppermost aquifer; therefore it is unconfined. Calculating overburden stress from changing water levels in this aquifer."
-#                % aquifer
-#            )
-#            unconfined_aquifer_name = aquifer
-#            overburden_dates = head_data[aquifer][:, 0]
-#            overburden_data = [
-#                specific_yield
-#                * rho_w
-#                * g
-#                * (head_data[aquifer][i, 1] - head_data[aquifer][0, 1])
-#                for i in range(len(head_data[aquifer][:, 1]))
-#            ]
-#
-#
-#if overburden_stress_gwflow or overburden_stress_compaction:
-#    print("Clipping overburden stress.")
-#    idx_to_keep = (overburden_dates >= starttime) & (overburden_dates <= endtime)
-#    overburden_dates = overburden_dates[idx_to_keep]
-#    overburden_data = np.array(overburden_data)[idx_to_keep]
-#    print("Clipping done.")
-#    plt.plot_date(overburden_dates, overburden_data)
-#    plt.savefig("%s/input_data/overburden_stress_series.png" % outdestination)
-#    with open("%s/input_data/overburden_data.csv" % outdestination, "w+") as myCsv:
-#        csvWriter = csv.writer(myCsv, delimiter=",")
-#        csvWriter.writerows([overburden_dates, overburden_data])
-#    print("\tOverburden stress calculated and saved in input_data.")
-#effective_stress = {}
-#
-#
-#plt.figure(figsize=(18, 12))
-#sns.set_style("darkgrid")
-#sns.set_context("notebook")
-#for aquifer in all_aquifers_needing_head_data:
-#    plt.plot_date(
-#        head_data[aquifer][:, 0], head_data[aquifer][:, 1], label="%s" % aquifer
-#    )
-#plt.ylabel("Head (masl)")
-#plt.legend()
-#plt.savefig("%s/input_data/input_head_timeseries.png" % outdestination)
-#plt.savefig("%s/input_data/input_head_timeseries.pdf" % outdestination)
-## plt.savefig('%s/input_data/input_head_timeseries.svg' % outdestination)
-#plt.close()
-#sns.set_style("white")
-#
-#reading_head_stop = time.time()
-#reading_head_time = reading_head_stop - reading_head_start
-#
-#print()
-#if len(layers_requiring_solving) >= 0:
+# print()
+# if len(layers_requiring_solving) >= 0:
 #    print("Making input clay distribution plot.")
 #    thicknesses_tmp = []
 #    for layer in layers_requiring_solving:
@@ -482,41 +504,41 @@ endtime = np.min(endtimes)
 #    plt.close()
 #
 ## %% New section, head solver.
-#print()
-#print()
-#print("".center(80, "*"))
-#print("  SOLVING FOR HEAD TIME SERIES IN CLAY LAYERS  ".center(80, "*"))
-#print("".center(80, "*"))
-#print()
-#solving_head_start = time.time()
-#time.sleep(internal_time_delay)
+# print()
+# print()
+# print("".center(80, "*"))
+# print("  SOLVING FOR HEAD TIME SERIES IN CLAY LAYERS  ".center(80, "*"))
+# print("".center(80, "*"))
+# print()
+# solving_head_start = time.time()
+# time.sleep(internal_time_delay)
 #
-#print("Hydrostratigraphy:")
-#print("".center(60, "-"))
-#for layer in layer_names:
+# print("Hydrostratigraphy:")
+# print("".center(60, "-"))
+# for layer in layer_names:
 #    text = layer + " (%s)" % layer_types[layer]
 #    print(text.center(60, " "))
 #    print("".center(60, "-"))
-#print()
-#print()
+# print()
+# print()
 #
-#print(
+# print(
 #    "Head time series to be solved within the following layers: %s"
 #    % layers_requiring_solving
-#)
+# )
 #
-#inelastic_flag = {}
-#inelastic_flag_compaction = {}
-#Z = {}
-#t_gwflow = {}
+# inelastic_flag = {}
+# inelastic_flag_compaction = {}
+# Z = {}
+# t_gwflow = {}
 #
-#head_series = copy.deepcopy(head_data)
+# head_series = copy.deepcopy(head_data)
 #
-#initial_condition_precons = {}
+# initial_condition_precons = {}
 ## if save_output_head_timeseries:
 ##    os.mkdir('%s/head_outputs' % outdestination)
 #
-#if len(layers_requiring_solving) >= 0:
+# if len(layers_requiring_solving) >= 0:
 #    groundwater_solution_dates = {}
 #    for layer in layers_requiring_solving:
 #        print("")
@@ -1626,25 +1648,25 @@ endtime = np.min(endtimes)
 #                        "\t%s is an aquifer with no interbedded clays. No solution required."
 #                    )
 #
-#else:
+# else:
 #    print(
 #        "No layers require head time series solutions; skipping solving for head time series in clay layers."
 #    )
 #
-#solving_head_stop = time.time()
-#solving_head_time = solving_head_stop - solving_head_start
+# solving_head_stop = time.time()
+# solving_head_time = solving_head_stop - solving_head_start
 ## %% New section, saving head outputs.
-#print()
-#print()
-#print("".center(80, "*"))
-#print("  SAVING HEAD TIMESERIES OUTPUTS  ".center(80, "*"))
-#print("".center(80, "*"))
-#print()
-#saving_head_start = time.time()
-#time.sleep(internal_time_delay)
+# print()
+# print()
+# print("".center(80, "*"))
+# print("  SAVING HEAD TIMESERIES OUTPUTS  ".center(80, "*"))
+# print("".center(80, "*"))
+# print()
+# saving_head_start = time.time()
+# time.sleep(internal_time_delay)
 #
 #
-#if save_output_head_timeseries:
+# if save_output_head_timeseries:
 #    print("save_output_head_timeseries = True. Saving head timeseries for all layers.")
 #    for layer in layers_requiring_solving:
 #        print("\tSaving head timeseries for %s." % layer)
@@ -1804,7 +1826,7 @@ endtime = np.min(endtimes)
 #                    ]
 #                )
 #
-#for layer in layers_requiring_solving:
+# for layer in layers_requiring_solving:
 #    if create_output_head_video[layer]:
 #        print(
 #            "create_output_head_video = True. Creating head timeseries video for specified layers. Note: requires ffmpeg installed."
@@ -1856,36 +1878,36 @@ endtime = np.min(endtimes)
 #                    delt=30,
 #                )
 #
-#saving_head_stop = time.time()
-#saving_head_time = saving_head_stop - saving_head_start
+# saving_head_stop = time.time()
+# saving_head_time = saving_head_stop - saving_head_start
 #
 ## %% New section, compaction solver.
-#print()
-#print()
-#print("".center(80, "*"))
-#print("  SOLVING COMPACTION EQUATION  ".center(80, "*"))
-#print("".center(80, "*"))
-#print()
-#solving_compaction_start = time.time()
-#time.sleep(internal_time_delay)
+# print()
+# print()
+# print("".center(80, "*"))
+# print("  SOLVING COMPACTION EQUATION  ".center(80, "*"))
+# print("".center(80, "*"))
+# print()
+# solving_compaction_start = time.time()
+# time.sleep(internal_time_delay)
 #
 ## deformation_series={}
 ## deformation_series_elastic={}
 ## deformation_series_inelastic={}
 ## deformation_series_sand={}
-#deformation = {}
-#db = {}
-#deformation_OUTPUT = {}
-#compacting_layers = [
+# deformation = {}
+# db = {}
+# deformation_OUTPUT = {}
+# compacting_layers = [
 #    name for name, value in layer_compaction_switch.items() if value == True
-#]
-#if MODE == "resume":
+# ]
+# if MODE == "resume":
 #    preset_precons = True
-#else:
+# else:
 #    preset_precons = False
 #
 #
-#for layer in layer_names:
+# for layer in layer_names:
 #    if layer_types[layer] == "Aquifer":
 #        if layer_compaction_switch[layer]:
 #            print()
@@ -2145,9 +2167,9 @@ endtime = np.min(endtimes)
 #                        [groundwater_solution_dates[layer], totdeftmp]
 #                    )
 #
-#if (
+# if (
 #    MODE == "Normal"
-#):  # If we are resuming, we do not scale layer thicknesses by default.
+# ):  # If we are resuming, we do not scale layer thicknesses by default.
 #    if len(layers_var_thickness) >= 1:
 #        print("")
 #        print("Scaling layer outputs by temporally varying layer thicknesses.")
@@ -2257,21 +2279,21 @@ endtime = np.min(endtimes)
 #                deformation[layer]["total"][1, :][logicaltmp] * scaling_factor_tmp
 #            )
 #
-#solving_compaction_stop = time.time()
-#solving_compaction_time = solving_compaction_stop - solving_compaction_start
+# solving_compaction_stop = time.time()
+# solving_compaction_time = solving_compaction_stop - solving_compaction_start
 #
 ## %% New section, saving compaction outputs.
-#print()
-#print()
-#print("".center(80, "*"))
-#print("  SAVING COMPACTION SOLVER OUTPUTS  ".center(80, "*"))
-#print("".center(80, "*"))
-#print()
-#saving_compaction_start = time.time()
-#time.sleep(internal_time_delay)
+# print()
+# print()
+# print("".center(80, "*"))
+# print("  SAVING COMPACTION SOLVER OUTPUTS  ".center(80, "*"))
+# print("".center(80, "*"))
+# print()
+# saving_compaction_start = time.time()
+# time.sleep(internal_time_delay)
 #
 #
-#for layer in layer_names:
+# for layer in layer_names:
 #    if layer_types[layer] == "Aquitard":
 #        if layer_compaction_switch[layer]:
 #            print("Saving figures and data for aquitard layer %s." % layer)
@@ -2794,30 +2816,30 @@ endtime = np.min(endtimes)
 #                        )
 #
 #
-#print("Creating overall compaction plot and saving deformation series")
-#sns.set_style("whitegrid")
-#plt.figure(figsize=(18, 12))
-#dt_master_compacting_layers = {key: dt_master[key] for key in compacting_layers}
-#maxdt = max(dt_master_compacting_layers.values())
-#maxdtlayer = max(dt_master_compacting_layers.items(), key=operator.itemgetter(1))[0]
-#dt_interconnecteds = [
+# print("Creating overall compaction plot and saving deformation series")
+# sns.set_style("whitegrid")
+# plt.figure(figsize=(18, 12))
+# dt_master_compacting_layers = {key: dt_master[key] for key in compacting_layers}
+# maxdt = max(dt_master_compacting_layers.values())
+# maxdtlayer = max(dt_master_compacting_layers.items(), key=operator.itemgetter(1))[0]
+# dt_interconnecteds = [
 #    dt_headseries[layer]
 #    for layer in layer_names
 #    if (layer in compacting_layers) and (layer_types[layer] == "Aquifer")
-#]
-#if np.max(dt_interconnecteds) > maxdt:
+# ]
+# if np.max(dt_interconnecteds) > maxdt:
 #    maxdt = np.max(dt_interconnecteds)
-#print("\tmax dt (output dt) = %.2f" % maxdt)
-#deformation_OUTPUT = {}
+# print("\tmax dt (output dt) = %.2f" % maxdt)
+# deformation_OUTPUT = {}
 ## t_total_tmp = 0.0001*np.arange(10000*np.min(deformation[maxdtlayer]['total'][0,:]),10000*(np.max(deformation[maxdtlayer]['total'][0,:]+0.001)),10000*maxdt) <<I think this line is wrong again. Removing and seeing if it works
-#print(t_total_tmp)
-#deformation_OUTPUT["dates"] = [
+# print(t_total_tmp)
+# deformation_OUTPUT["dates"] = [
 #    x.strftime("%d-%b-%Y") for x in matplotlib.dates.num2date(t_total_tmp)
-#]
-#t_overall = np.zeros_like(t_total_tmp, dtype=float)
-#l_aqt = []
-#l_aqf = []
-#for layer in layer_names:
+# ]
+# t_overall = np.zeros_like(t_total_tmp, dtype=float)
+# l_aqt = []
+# l_aqf = []
+# for layer in layer_names:
 #    if layer_compaction_switch[layer]:
 #        if layer_types[layer] == "Aquitard":
 #            # dt_tmp = int(maxdt/dt_master[layer])
@@ -2848,31 +2870,31 @@ endtime = np.min(endtimes)
 #
 ## Add up all the deformations from each layer
 #
-#def_tot_tmp = np.zeros_like(t_total_tmp, dtype="float")
-#for layer in layer_names:
+# def_tot_tmp = np.zeros_like(t_total_tmp, dtype="float")
+# for layer in layer_names:
 #    if layer_compaction_switch[layer]:
 #        newtot = np.array(deformation[layer]["total"][1, :])[
 #            np.isin(deformation[layer]["total"][0, :], t_total_tmp)
 #        ]
 #        t_overall = t_overall + newtot
 #
-#deformation_OUTPUT["Total"] = t_overall
-#def_out = pd.DataFrame(deformation_OUTPUT)
-#def_out.to_csv("%s/Total_Deformation_Out.csv" % outdestination, index=False)
+# deformation_OUTPUT["Total"] = t_overall
+# def_out = pd.DataFrame(deformation_OUTPUT)
+# def_out.to_csv("%s/Total_Deformation_Out.csv" % outdestination, index=False)
 #
 #
-#(l3,) = plt.plot_date(t_total_tmp, t_overall, label="TOTAL def")
+# (l3,) = plt.plot_date(t_total_tmp, t_overall, label="TOTAL def")
 #
-#plt.ylabel("Z (m)")
-#plt.legend()
-#plt.savefig(
+# plt.ylabel("Z (m)")
+# plt.legend()
+# plt.savefig(
 #    "%s/figures/total_deformation_figure.png" % outdestination, bbox_inches="tight"
-#)
+# )
 ## Rezero on jan 2015
-#plt.xlim(
+# plt.xlim(
 #    matplotlib.dates.date2num([datetime.date(2015, 1, 1), datetime.date(2020, 1, 1)])
-#)
-#if np.min(l_tmp.get_xdata()) <= matplotlib.dates.date2num(datetime.date(2015, 1, 1)):
+# )
+# if np.min(l_tmp.get_xdata()) <= matplotlib.dates.date2num(datetime.date(2015, 1, 1)):
 #    for line in l_aqt:
 #        line.set_ydata(
 #            np.array(line.get_ydata())
@@ -2893,16 +2915,16 @@ endtime = np.min(endtimes)
 #        "%s/figures/total_deformation_figure_20152020.png" % outdestination,
 #        bbox_inches="tight",
 #    )
-#plt.close()
+# plt.close()
 #
-#saving_compaction_stop = time.time()
-#saving_compaction_time = saving_compaction_stop - saving_compaction_start
+# saving_compaction_stop = time.time()
+# saving_compaction_time = saving_compaction_stop - saving_compaction_start
 #
-#t_total_stop = time.time()
-#t_total = t_total_stop - t_total_start
+# t_total_stop = time.time()
+# t_total = t_total_stop - t_total_start
 #
-#plt.figure(figsize=(18, 18))
-#plt.pie(
+# plt.figure(figsize=(18, 18))
+# plt.pie(
 #    np.abs(
 #        [
 #            param_read_time,
@@ -2934,11 +2956,11 @@ endtime = np.min(endtimes)
 #        "misc",
 #    ],
 #    autopct=lambda p: "{:.2f}%  ({:,.0f})".format(p, p * t_total / 100),
-#)
-#plt.title("Total runtime = %i seconds" % t_total)
-#plt.savefig("%s/figures/runtime_breakdown.png" % outdestination, bbox_inches="tight")
-#plt.close()
+# )
+# plt.title("Total runtime = %i seconds" % t_total)
+# plt.savefig("%s/figures/runtime_breakdown.png" % outdestination, bbox_inches="tight")
+# plt.close()
 #
 #
-#print("Model Run Complete")
+# print("Model Run Complete")
 #
