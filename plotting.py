@@ -8,8 +8,195 @@ import subprocess
 
 import numpy as np
 import seaborn as sns
+import matplotlib.pyplot as plt
 
 from utils import printProgressBar
+
+
+def plot_overburden_stress(overburden_df, out_path):
+    """
+    Create and save plot of overburden stress as a function of time
+
+    Parameters
+    ----------
+    overburden_df : pd.DataFrame
+        pandas DataFrame containing dates and overburden stress
+
+    out_path : str
+        path to save overburden time series plot
+
+    Returns
+    -------
+    None
+        saves plot to out_path
+    """
+    plt.figure(figsize=(18, 12))
+
+    # set plotting styles
+    sns.set_style("darkgrid")
+    sns.set_context("notebook")
+
+    # plot overburden stress
+    plt.plot(overburden_df.iloc[:, 0].to_numpy(), overburden_df.iloc[:, 1].to_numpy())
+
+    # set labels and title
+    plt.title("Overburden stress for aquifer as a function of time")
+    plt.ylabel(r"Overburden stress ($\frac{N}{m^2}$)")
+    plt.xlabel("Time")
+
+    # save figure
+    if os.path.isfile(out_path):
+        plt.savefig(out_path)
+    elif os.path.isdir(out_path):
+        plt.savefig(os.path.join(out_path, "overburden_stress_series.png"))
+
+    plt.close()
+
+
+def plot_head_timeseries(head_data, aquifers_needing_heads, out_path):
+    """
+    Create and save plot of groundwater head as a function of time
+
+    Parameters
+    ----------
+    head_data : dict[str, pd.DataFrame]
+        dictionary containing pandas DataFrames of heads for each aquifer
+
+    aquifers_needing_heads : list
+        list of aquifer names needing head data
+
+    out_path : str
+        path to save head time series plots
+
+    Returns
+    -------
+    None
+        saves plots to output_path
+    """
+    # plot input head timeseries
+    plt.figure(figsize=(18, 12))
+    sns.set_style("darkgrid")
+    sns.set_context("notebook")
+
+    for aquifer in aquifers_needing_heads:
+        plt.plot(
+            head_data[aquifer].iloc[:, 0].to_numpy(),
+            head_data[aquifer].iloc[:, 1].to_numpy(),
+            label=aquifer,
+        )
+
+    plt.title("Aquifer Head as a function of time")
+    plt.ylabel("Head (masl)")
+    plt.xlabel("Time")
+    plt.legend()
+
+    if os.path.isfile(out_path):
+        plt.savefig(out_path)
+    elif os.path.isdir(out_path):
+        plt.savefig(os.path.join(out_path, "input_head_timeseries.png"))
+        plt.savefig(os.path.join(out_path, "input_head_timeseries.pdf"))
+
+    plt.close()
+
+
+def plot_clay_distributions(
+    layers_requiring_solving,
+    layer_types,
+    layer_thickness_types,
+    layer_thicknesses,
+    interbeds_distributions,
+    out_path,
+):
+    """
+    Create and save a bar chart of clay distributions
+
+    Parameters
+    ----------
+
+
+    Returns
+    -------
+    None
+        saves plot to output path
+    """
+    thicknesses_tmp = []
+    for layer in layers_requiring_solving:
+        if layer_types[layer] == "Aquifer":
+            for key in interbeds_distributions[layer].keys():
+                thicknesses_tmp.append(key)
+        if layer_types[layer] == "Aquitard":
+            if layer_thickness_types[layer] == "constant":
+                thicknesses_tmp.append(layer_thicknesses[layer])
+            else:
+                raise NotImplementedError(
+                    "Error, aquitards with varying thickness not (yet) supported."
+                )
+
+    # Find the smallest difference between two clay layer thicknesses. 
+    # If that is greater than 1, set the bar width to be 1. Otherwise, set the bar width to be that difference.
+    print(thicknesses_tmp)
+
+    # calculate the width of the bars in the bar chart
+    if len(thicknesses_tmp) > 1:
+        diffs = [np.array(thicknesses_tmp) - t for t in thicknesses_tmp]
+        smallest_width = np.min(np.abs(np.array(diffs)[np.where(diffs)]))
+    else:
+        smallest_width = 1
+    if smallest_width > 0.5:
+        smallest_width = 0.5
+
+    barwidth = smallest_width / len(layers_requiring_solving)
+
+    # Make the clay distribution plot
+    sns.set_context("poster")
+    plt.figure(figsize=(18, 12))
+
+    layeri = 0
+    for layer in layers_requiring_solving:
+        if layer_types[layer] == "Aquifer":
+            plt.bar(
+                np.array(list(interbeds_distributions[layer].keys()))
+                + layeri * barwidth,
+                list(interbeds_distributions[layer].values()),
+                width=barwidth,
+                label=layer,
+                color="None",
+                edgecolor=sns.color_palette()[layeri],
+                linewidth=5,
+                alpha=0.6,
+            )
+            layeri += 1
+        if layer_types[layer] == "Aquitard":
+            plt.bar(
+                layer_thicknesses[layer] + layeri * barwidth,
+                1,
+                width=barwidth,
+                label=layer,
+                color="None",
+                edgecolor=sns.color_palette()[layeri],
+                linewidth=5,
+                alpha=0.6,
+            )
+            layeri += 1
+
+    # format plot
+    plt.legend()
+    plt.title("Clay Interbed Distribution")
+    plt.xticks(
+        np.arange(0, np.max(thicknesses_tmp) + barwidth + 1, np.max([1, barwidth]))
+    )
+    plt.xlabel("Layer thickness (m)")
+    plt.ylabel("Number of layers")
+
+    # save plot
+    if os.path.isdir(out_path):
+        plt.savefig(
+            os.path.join(out_path, "clay_distributions.png"), bbox_inches="tight"
+        )
+    elif os.path.isfile(out_path):
+        plt.savefig(out_path, bbox_inches="tight")
+
+    plt.close()
 
 
 def create_head_video_elasticinelastic(
