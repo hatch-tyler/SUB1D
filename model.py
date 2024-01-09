@@ -41,7 +41,12 @@ from parameters import (
     read_parameter_layerthickness_multitype,
     parse_parameter_file,
 )
-from plotting import create_head_video_elasticinelastic
+from plotting import (
+    create_head_video_elasticinelastic,
+    plot_overburden_stress,
+    plot_head_timeseries,
+    plot_clay_distributions,
+)
 
 # =============================================================================
 # ===============================RUN MODEL==============================-
@@ -276,22 +281,23 @@ if len(all_aquifers_needing_head_data) >= 0:
         print(f"File for {aquifer} specified as {fileloc}. Looking for file.")
 
         if not os.path.isfile(fileloc):
-            raise FileNotFoundError(f"Error reading head data. File {fileloc} not found.")
+            raise FileNotFoundError(
+                f"Error reading head data. File {fileloc} not found."
+            )
+
         print(f"File {fileloc} exists. Storing copy in output folder.")
         print("Reading in head time series.")
-            
+
         # copy csv files to input_data folder in output directory
-        shutil.copy2(
-            fileloc, os.path.join(input_copy, os.path.basename(fileloc))
-        )
-        
+        shutil.copy2(fileloc, os.path.join(input_copy, os.path.basename(fileloc)))
+
         # read groundwater level data from csv file
         data = pd.read_csv(fileloc, parse_dates=[0])
-            
+
         # TODO: need to understand why to convert dates to a number here...
-        #try:
+        # try:
         #    dates = matplotlib.dates.date2num(data.iloc[:, 0].values)
-        #except Exception:
+        # except Exception:
         #    print(
         #        "Pandas couldn't parse the date head. Going to try treating the date as a float. If it's not, things may fail from hereon."
         #    )
@@ -299,8 +305,8 @@ if len(all_aquifers_needing_head_data) >= 0:
         #    if time_unit == "years":
         #        dates = 365 * dates
 
-        #data = data.iloc[:, 1].values
-        #head_data[aquifer] = np.array([dates, data]).T
+        # data = data.iloc[:, 1].values
+        # head_data[aquifer] = np.array([dates, data]).T
         head_data[aquifer] = data
         print(f"Successfully read in. Head data for {aquifer} printing now.")
         print(head_data[aquifer])
@@ -311,28 +317,32 @@ else:
     print("No aquifers requiring head data; skipping reading head data.")
 
 # get the starting times for each aquifer layer
-#starttimes = [
+# starttimes = [
 #    np.min(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
-#]
-starttimes = [head_data[aquifer].iloc[:,0].min() for aquifer in all_aquifers_needing_head_data]
-print(starttimes)
+# ]
+starttimes = [
+    head_data[aquifer].iloc[:, 0].min() for aquifer in all_aquifers_needing_head_data
+]
+print([t.strftime("%m-%d-%Y") for t in starttimes])
 
 # start time is the maximum for all aquifer layers
 starttime = np.max(starttimes)
 
 # get ending times for each aquifer layer
-#endtimes = [
+# endtimes = [
 #    np.max(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
-#]
-endtimes = [head_data[aquifer].iloc[:,0].max() for aquifer in all_aquifers_needing_head_data]
+# ]
+endtimes = [
+    head_data[aquifer].iloc[:, 0].max() for aquifer in all_aquifers_needing_head_data
+]
 
 # end time is the minimum for all aquifer layers
 endtime = np.min(endtimes)
 
 print("CLIPPING HEAD TIMESERIES TO HAVE CONSISTENT START/END DATES ACROSS AQUIFERS.")
-#print(
+# print(
 #    f"Latest startdate found is {matplotlib.dates.num2date(starttime).strftime('%d-%b-%Y')} and earliest end date is {matplotlib.dates.num2date(endtime).strftime('%d-%b-%Y')}. These will be used as model start/end times."
-#)
+# )
 print(
     f"Latest startdate found is {starttime.strftime('%d-%b-%Y')} and earliest end date is {endtime.strftime('%d-%b-%Y')}. These will be used as model start/end times."
 )
@@ -349,9 +359,9 @@ for aquifer in all_aquifers_needing_head_data:
     idx_to_keep = (head_data[aquifer].iloc[:, 0] >= starttime) & (
         head_data[aquifer].iloc[:, 0] <= endtime
     )
-    #datesnew = head_data[aquifer][:, 0][idx_to_keep]
-    #datanew = head_data[aquifer][:, 1][idx_to_keep]
-    #head_data[aquifer] = np.array([datesnew, datanew]).T
+    # datesnew = head_data[aquifer][:, 0][idx_to_keep]
+    # datanew = head_data[aquifer][:, 1][idx_to_keep]
+    # head_data[aquifer] = np.array([datesnew, datanew]).T
     head_data[aquifer] = head_data[aquifer][idx_to_keep]
 
 print("Clipping done.")
@@ -367,14 +377,18 @@ if MODE == "resume":
             head_data[aquifer][:, 1] = head_data[aquifer][:, 1][0]
             print(head_data[aquifer])
 
+# save head timeseries to csv
 for aquifer in all_aquifers_needing_head_data:
-    #with open(
+    # with open(
     #    os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"),
     #    "w+",
-    #) as myCsv:
+    # ) as myCsv:
     #    csvWriter = csv.writer(myCsv, delimiter=",")
     #    csvWriter.writerows(head_data[aquifer])
-    head_data[aquifer].to_csv(os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"), index=False)
+    head_data[aquifer].to_csv(
+        os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"),
+        index=False,
+    )
 
 if overburden_stress_gwflow or overburden_stress_compaction:
     for aquifer in all_aquifers_needing_head_data:
@@ -391,191 +405,203 @@ if overburden_stress_gwflow or overburden_stress_compaction:
                 * (head_data[aquifer].iloc[i, 1] - head_data[aquifer].iloc[0, 1])
                 for i in range(len(head_data[aquifer]))
             ]
-            overburden_df = pd.DataFrame({"Date": overburden_dates, "Overburden Stress": overburden_data})
+            overburden_df = pd.DataFrame(
+                {"Date": overburden_dates, "Overburden Stress": overburden_data}
+            )
 
 
 if overburden_stress_gwflow or overburden_stress_compaction:
     print("Clipping overburden stress.")
     idx_to_keep = (overburden_dates >= starttime) & (overburden_dates <= endtime)
-    #overburden_dates = overburden_dates[idx_to_keep]
-    #overburden_data = np.array(overburden_data)[idx_to_keep]
+    # overburden_dates = overburden_dates[idx_to_keep]
+    # overburden_data = np.array(overburden_data)[idx_to_keep]
     overburden_df = overburden_df[idx_to_keep]
     print("Clipping done.")
-    
+
     # plot overburden data
-    #plt.plot_date(overburden_dates, overburden_data)
-    plt.plot(overburden_df.iloc[:,0].to_numpy(), overburden_df.iloc[:,1].to_numpy())
-    plt.savefig(os.path.join(input_copy, "overburden_stress_series.png"))
-    
+    # plt.plot_date(overburden_dates, overburden_data)
+    # plt.plot(overburden_df.iloc[:,0].to_numpy(), overburden_df.iloc[:,1].to_numpy())
+    # plt.savefig(os.path.join(input_copy, "overburden_stress_series.png"))
+    plot_overburden_stress(overburden_df, input_copy)
+
     # write overburden stress data to csv
-    #with open(os.path.join(input_copy, "overburden_data.csv"), "w+") as myCsv:
+    # with open(os.path.join(input_copy, "overburden_data.csv"), "w+") as myCsv:
     #    csvWriter = csv.writer(myCsv, delimiter=",")
     #    csvWriter.writerows([overburden_dates, overburden_data])
     overburden_df.to_csv(os.path.join(input_copy, "overburden_data.csv"), index=False)
-    
+
     print("Overburden stress calculated and saved in input_data.")
 
 effective_stress = {}
 
 # plot input head timeseries
-plt.figure(figsize=(18, 12))
-sns.set_style("darkgrid")
-sns.set_context("notebook")
-for aquifer in all_aquifers_needing_head_data:
-    #plt.plot_date(
-    #    head_data[aquifer][:, 0], head_data[aquifer][:, 1], label=aquifer
-    #0)
-    plt.plot(head_data[aquifer].iloc[:,0].to_numpy(), head_data[aquifer].iloc[:,1].to_numpy())
-plt.ylabel("Head (masl)")
-plt.legend()
-plt.savefig(os.path.join(input_copy, "input_head_timeseries.png"))
-plt.savefig(os.path.join(input_copy, "input_head_timeseries.pdf"))
-# plt.savefig(os.path.join(input_copy, "input_head_timeseries.svg"))
-plt.close()
-sns.set_style("white")
-#
-# reading_head_stop = time.time()
-# reading_head_time = reading_head_stop - reading_head_start
-#
-# print()
-# if len(layers_requiring_solving) >= 0:
-#    print("Making input clay distribution plot.")
-#    thicknesses_tmp = []
-#    for layer in layers_requiring_solving:
-#        if layer_types[layer] == "Aquifer":
-#            for key in interbeds_distributions[layer].keys():
-#                thicknesses_tmp.append(key)
-#        if layer_types[layer] == "Aquitard":
-#            if layer_thickness_types[layer] == "constant":
-#                thicknesses_tmp.append(layer_thicknesses[layer])
-#            else:
-#                print("Error, aquitards with varying thickness not (yet) supported.")
-#                sys.exit(1)
-#    # Find the smallest difference between two clay layer thicknesses. If that is greater than 1, set the bar width to be 1. Else, set the bar width to be that difference.
-#    print(thicknesses_tmp)
-#    if len(thicknesses_tmp) > 1:
-#        diffs = [np.array(thicknesses_tmp) - t for t in thicknesses_tmp]
-#        smallest_width = np.min(np.abs(np.array(diffs)[np.where(diffs)]))
-#    else:
-#        smallest_width = 1
-#    if smallest_width > 0.5:
-#        smallest_width = 0.5
-#    barwidth = smallest_width / len(layers_requiring_solving)
-#
-#    # Make the clay distribution plot
-#    sns.set_context("poster")
-#    plt.figure(figsize=(18, 12))
-#    layeri = 0
-#    for layer in layers_requiring_solving:
-#        if layer_types[layer] == "Aquifer":
-#            plt.bar(
-#                np.array(list(interbeds_distributions[layer].keys()))
-#                + layeri * barwidth,
-#                list(interbeds_distributions[layer].values()),
-#                width=barwidth,
-#                label=layer,
-#                color="None",
-#                edgecolor=sns.color_palette()[layeri],
-#                linewidth=5,
-#                alpha=0.6,
-#            )
-#            layeri += 1
-#        if layer_types[layer] == "Aquitard":
-#            plt.bar(
-#                layer_thicknesses[layer] + layeri * barwidth,
-#                1,
-#                width=barwidth,
-#                label=layer,
-#                color="None",
-#                edgecolor=sns.color_palette()[layeri],
-#                linewidth=5,
-#                alpha=0.6,
-#            )
-#            layeri += 1
-#    plt.legend()
-#    plt.xticks(
-#        np.arange(0, np.max(thicknesses_tmp) + barwidth + 1, np.max([1, barwidth]))
-#    )
-#    plt.xlabel("Layer thickness (m)")
-#    plt.ylabel("Number of layers")
-#    plt.savefig(
-#        "%s/input_data/clay_distributions.png" % outdestination, bbox_inches="tight"
-#    )
-#    plt.close()
-#
-## %% New section, head solver.
-# print()
-# print()
-# print("".center(80, "*"))
-# print("  SOLVING FOR HEAD TIME SERIES IN CLAY LAYERS  ".center(80, "*"))
-# print("".center(80, "*"))
-# print()
-# solving_head_start = time.time()
+# plt.figure(figsize=(18, 12))
+# sns.set_style("darkgrid")
+# sns.set_context("notebook")
+# for aquifer in all_aquifers_needing_head_data:
+#    #plt.plot_date(
+#    #    head_data[aquifer][:, 0], head_data[aquifer][:, 1], label=aquifer
+#    #0)
+#    plt.plot(head_data[aquifer].iloc[:,0].to_numpy(), head_data[aquifer].iloc[:,1].to_numpy())
+# plt.ylabel("Head (masl)")
+# plt.legend()
+# plt.savefig(os.path.join(input_copy, "input_head_timeseries.png"))
+# plt.savefig(os.path.join(input_copy, "input_head_timeseries.pdf"))
+## plt.savefig(os.path.join(input_copy, "input_head_timeseries.svg"))
+# plt.close()
+plot_head_timeseries(head_data, all_aquifers_needing_head_data, input_copy)
+
+# get time at end of reading and plotting head timeseries
+reading_head_stop = time.time()
+reading_head_time = reading_head_stop - reading_head_start
+
+if len(layers_requiring_solving) >= 0:
+    print("Making input clay distribution plot.")
+    # thicknesses_tmp = []
+    # for layer in layers_requiring_solving:
+    #    if layer_types[layer] == "Aquifer":
+    #        for key in interbeds_distributions[layer].keys():
+    #            thicknesses_tmp.append(key)
+    #    if layer_types[layer] == "Aquitard":
+    #        if layer_thickness_types[layer] == "constant":
+    #            thicknesses_tmp.append(layer_thicknesses[layer])
+    #        else:
+    #            raise NotImplementedError(
+    #                "Error, aquitards with varying thickness not (yet) supported."
+    #            )
+    #
+    ## Find the smallest difference between two clay layer thicknesses. If that is greater than 1, set the bar width to be 1. Else, set the bar width to be that difference.
+    # print(thicknesses_tmp)
+    #
+    # if len(thicknesses_tmp) > 1:
+    #    diffs = [np.array(thicknesses_tmp) - t for t in thicknesses_tmp]
+    #    smallest_width = np.min(np.abs(np.array(diffs)[np.where(diffs)]))
+    # else:
+    #    smallest_width = 1
+    # if smallest_width > 0.5:
+    #    smallest_width = 0.5
+    #
+    # barwidth = smallest_width / len(layers_requiring_solving)
+    #
+    ## Make the clay distribution plot
+    # sns.set_context("poster")
+    # plt.figure(figsize=(18, 12))
+    # layeri = 0
+    # for layer in layers_requiring_solving:
+    #    if layer_types[layer] == "Aquifer":
+    #        plt.bar(
+    #            np.array(list(interbeds_distributions[layer].keys()))
+    #            + layeri * barwidth,
+    #            list(interbeds_distributions[layer].values()),
+    #            width=barwidth,
+    #            label=layer,
+    #            color="None",
+    #            edgecolor=sns.color_palette()[layeri],
+    #            linewidth=5,
+    #            alpha=0.6,
+    #        )
+    #        layeri += 1
+    #    if layer_types[layer] == "Aquitard":
+    #        plt.bar(
+    #            layer_thicknesses[layer] + layeri * barwidth,
+    #            1,
+    #            width=barwidth,
+    #            label=layer,
+    #            color="None",
+    #            edgecolor=sns.color_palette()[layeri],
+    #            linewidth=5,
+    #            alpha=0.6,
+    #        )
+    #        layeri += 1
+    # plt.legend()
+    # plt.xticks(
+    #    np.arange(0, np.max(thicknesses_tmp) + barwidth + 1, np.max([1, barwidth]))
+    # )
+    # plt.xlabel("Layer thickness (m)")
+    # plt.ylabel("Number of layers")
+    # plt.savefig(os.path.join(input_copy, "clay_distributions.png"), bbox_inches="tight")
+    # plt.close()
+    plot_clay_distributions(
+        layers_requiring_solving,
+        layer_types,
+        layer_thickness_types,
+        layer_thicknesses,
+        interbeds_distributions,
+        input_copy,
+    )
+
+# %% New section, head solver.
+print("\n\n" + "".center(80, "*"))
+print("  SOLVING FOR HEAD TIME SERIES IN CLAY LAYERS  ".center(80, "*"))
+print("".center(80, "*") + "\n")
+
+# get start time for solving for heads in clay layers
+solving_head_start = time.time()
 # time.sleep(internal_time_delay)
 #
-# print("Hydrostratigraphy:")
-# print("".center(60, "-"))
-# for layer in layer_names:
-#    text = layer + " (%s)" % layer_types[layer]
-#    print(text.center(60, " "))
-#    print("".center(60, "-"))
-# print()
-# print()
-#
-# print(
-#    "Head time series to be solved within the following layers: %s"
-#    % layers_requiring_solving
-# )
-#
-# inelastic_flag = {}
-# inelastic_flag_compaction = {}
-# Z = {}
-# t_gwflow = {}
-#
-# head_series = copy.deepcopy(head_data)
-#
-# initial_condition_precons = {}
-## if save_output_head_timeseries:
-##    os.mkdir('%s/head_outputs' % outdestination)
-#
-# if len(layers_requiring_solving) >= 0:
-#    groundwater_solution_dates = {}
-#    for layer in layers_requiring_solving:
-#        print("")
-#        print("\tBeginning solving process for layer %s." % layer)
-#        if layer_types[layer] == "Aquitard":
-#            print("\t\t%s is an aquitard." % layer)
-#            aquitard_position = layer_names.index(layer)
-#            top_boundary = layer_names[aquitard_position - 1]
-#            bot_boundary = layer_names[aquitard_position + 1]
-#            initial_condition_precons[layer] = np.array([])
-#            print(
-#                "\t\tHead time series required for overlying layer %s and lower layer %s."
-#                % (top_boundary, bot_boundary)
-#            )
-#            if top_boundary in head_data.keys() and bot_boundary in head_data.keys():
-#                print("\t\t\tHead time series found.")
-#
-#            # check if dt_master is specified
-#            if layer not in dt_master.keys():
-#                print(
-#                    "\t\t\tSolving head series error: TERMINAL. dt_master not specified for layer %s. EXITING."
-#                    % layer
-#                )
-#                sys.exit(1)
-#
-#            t_top = head_data[top_boundary][:, 0]
-#            dt_tmp = np.diff(t_top)
-#            test1 = [n.is_integer() for n in dt_master[layer] / dt_tmp]
-#            test2 = [n.is_integer() for n in dt_tmp / dt_master[layer]]
-#            if (not np.all(test1) and not np.all(test2)) or (
-#                not list(dt_tmp).count(dt_tmp[0])
-#            ) == len(dt_tmp):
-#                print(
-#                    "\t\t\tSolving head series error: TERMINAL. dt_master not compatible with dt in the %s input series. dt_master must be an integer multiple of dt in the time series, and dt in the time series must be constant. EXITING."
-#                    % top_boundary
-#                )
-#                sys.exit(1)
+print("Hydrostratigraphy:")
+print("".center(60, "-"))
+for layer in layer_names:
+    text = f"{layer} ({layer_types[layer]})"
+    print(text.center(60, " "))
+    print("".center(60, "-"))
+
+print(
+    f"\n\nHead time series to be solved within the following layers: {layers_requiring_solving}"
+)
+
+inelastic_flag = {}
+inelastic_flag_compaction = {}
+Z = {}
+t_gwflow = {}
+
+head_series = copy.deepcopy(head_data)
+
+initial_condition_precons = {}
+# if save_output_head_timeseries:
+#    os.mkdir(os.path.join(outdestination, "head_outputs"))
+
+if len(layers_requiring_solving) >= 0:
+    groundwater_solution_dates = {}
+    for layer in layers_requiring_solving:
+        print(f"Beginning solving process for layer {layer}.")
+
+        if layer_types[layer] == "Aquitard":
+            print(f"{layer} is an aquitard.")
+
+            # get the index of the aquitard in the layer_names list
+            aquitard_position = layer_names.index(layer)
+
+            # get the top and bottom boundaries using the position of the aquitard in the layer_names list
+            top_boundary = layer_names[aquitard_position - 1]
+            bot_boundary = layer_names[aquitard_position + 1]
+
+            # initialize the initial condition for preconsolidation head as an empty numpy array
+            initial_condition_precons[layer] = np.array([])
+            print(
+                f"Head time series required for overlying layer {top_boundary} and lower layer {bot_boundary}."
+            )
+            if top_boundary in head_data.keys() and bot_boundary in head_data.keys():
+                print("Head time series found.")
+
+            # check if dt_master is specified
+            if layer not in dt_master.keys():
+                raise ValueError(
+                    f"Error solving head series. dt_master not specified for layer {layer}."
+                )
+
+            t_top = head_data[top_boundary][:, 0]
+            dt_tmp = np.diff(t_top)
+            test1 = [n.is_integer() for n in dt_master[layer] / dt_tmp]
+            test2 = [n.is_integer() for n in dt_tmp / dt_master[layer]]
+            if (not np.all(test1) and not np.all(test2)) or (
+                not list(dt_tmp).count(dt_tmp[0])
+            ) == len(dt_tmp):
+                print(
+                    f"Error solving head series. dt_master not compatible with dt in the {top_boundary} input series. "
+                    "dt_master must be an integer multiple of dt in the time series, and dt in the time series must be constant."
+                )
+                sys.exit(1)
 #            if dt_master[layer] >= dt_tmp[0]:
 #                spacing_top = int(dt_master[layer] / dt_tmp[0])
 #                top_head_tmp = head_data[top_boundary]
@@ -1655,6 +1681,7 @@ sns.set_style("white")
 #
 # solving_head_stop = time.time()
 # solving_head_time = solving_head_stop - solving_head_start
+
 ## %% New section, saving head outputs.
 # print()
 # print()
