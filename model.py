@@ -19,6 +19,7 @@ import operator
 import pandas as pd
 import numpy as np
 import seaborn as sns
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
 from netCDF4 import Dataset
@@ -102,8 +103,8 @@ if MODE == "resume":
         sys.exit(1)
 
     resume_date = read_parameter("resume_date", str, 1, paramfilelines)
-    resume_date = datetime.datetime.strptime(resume_date, "%b-%d-%Y")
-    print(f"\t\tResume date read in as {resume_date}")
+    resume_date = pd.to_datetime(resume_date, format="%b-%d-%Y")
+    print(f"\t\tResume date read in as {resume_date.stftime('%d-%b-%Y')}")
 
     no_layers = read_parameter("no_layers", int, 1, paramfilelines)
     layer_types = read_parameter("layer_types", str, no_layers, paramfilelines)
@@ -296,7 +297,7 @@ if len(all_aquifers_needing_head_data) >= 0:
 
         # TODO: need to understand why to convert dates to a number here...
         # try:
-        #    dates = matplotlib.dates.date2num(data.iloc[:, 0].values)
+        #    dates = mdates.date2num(data.iloc[:, 0].values)
         # except Exception:
         #    print(
         #        "Pandas couldn't parse the date head. Going to try treating the date as a float. If it's not, things may fail from hereon."
@@ -341,7 +342,7 @@ endtime = np.min(endtimes)
 
 print("CLIPPING HEAD TIMESERIES TO HAVE CONSISTENT START/END DATES ACROSS AQUIFERS.")
 # print(
-#    f"Latest startdate found is {matplotlib.dates.num2date(starttime).strftime('%d-%b-%Y')} and earliest end date is {matplotlib.dates.num2date(endtime).strftime('%d-%b-%Y')}. These will be used as model start/end times."
+#    f"Latest startdate found is {mdates.num2date(starttime).strftime('%d-%b-%Y')} and earliest end date is {mdates.num2date(endtime).strftime('%d-%b-%Y')}. These will be used as model start/end times."
 # )
 print(
     f"Latest startdate found is {starttime.strftime('%d-%b-%Y')} and earliest end date is {endtime.strftime('%d-%b-%Y')}. These will be used as model start/end times."
@@ -349,42 +350,33 @@ print(
 # Clip to have common starting date
 print("Clipping input series to model starttime.")
 if MODE == "resume":
-    starttime = matplotlib.dates.date2num(resume_date)
+    starttime = resume_date
     print(
         f"\tHead startdate is resume date; clipping series accordingly to start at {resume_date.strftime('%d-%b-%Y')}."
     )
 
-
 for aquifer in all_aquifers_needing_head_data:
+    # create filter criteria for dates between the starttime and endtime
     idx_to_keep = (head_data[aquifer].iloc[:, 0] >= starttime) & (
         head_data[aquifer].iloc[:, 0] <= endtime
     )
-    # datesnew = head_data[aquifer][:, 0][idx_to_keep]
-    # datanew = head_data[aquifer][:, 1][idx_to_keep]
-    # head_data[aquifer] = np.array([datesnew, datanew]).T
+
+    # filter head data between start time and endtime
     head_data[aquifer] = head_data[aquifer][idx_to_keep]
 
-print("Clipping done.")
+    print(f"Clipping for {aquifer} completed.")
 
-if MODE == "resume":
-    for aquifer in all_aquifers_needing_head_data:
+    if MODE == "resume":
         if resume_head_value[aquifer] == "cst":
             print(
-                f"Resume head value=cst. Setting head in aquifer layers to be constant at the value it was in {resume_date}."
+                f"Resume head value=cst. Setting head in aquifer layers to be constant at the value it was in {resume_date.strftime('%d-%b-%Y')}."
             )
 
-            print(f"Setting head in {aquifer} to be {head_data[aquifer][:, 1][0]:.2f}.")
-            head_data[aquifer][:, 1] = head_data[aquifer][:, 1][0]
+            print(f"Setting head in {aquifer} to be {head_data[aquifer].iloc[:, 1][0]:.2f}.")
+            head_data[aquifer].iloc[:, 1] = head_data[aquifer].iloc[:, 1][0]
             print(head_data[aquifer])
 
-# save head timeseries to csv
-for aquifer in all_aquifers_needing_head_data:
-    # with open(
-    #    os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"),
-    #    "w+",
-    # ) as myCsv:
-    #    csvWriter = csv.writer(myCsv, delimiter=",")
-    #    csvWriter.writerows(head_data[aquifer])
+    # write head data to csv for each aquifer layer
     head_data[aquifer].to_csv(
         os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"),
         index=False,
@@ -394,61 +386,38 @@ if overburden_stress_gwflow or overburden_stress_compaction:
     for aquifer in all_aquifers_needing_head_data:
         if aquifer == layer_names[0]:
             print(
-                f"{aquifer} is the uppermost aquifer; therefore it is unconfined. Calculating overburden stress from changing water levels in this aquifer."
+                f"{aquifer} is the uppermost aquifer; therefore it is unconfined." 
+                "Calculating overburden stress from changing water levels in this aquifer."
             )
             unconfined_aquifer_name = aquifer
             overburden_dates = head_data[aquifer].iloc[:, 0]
-            overburden_data = [
+            
+            # calculate overburden 
+            overburden_data = (
                 specific_yield
                 * rho_w
                 * g
-                * (head_data[aquifer].iloc[i, 1] - head_data[aquifer].iloc[0, 1])
-                for i in range(len(head_data[aquifer]))
-            ]
-            overburden_df = pd.DataFrame(
-                {"Date": overburden_dates, "Overburden Stress": overburden_data}
+                * (head_data[aquifer].iloc[:, 1] - head_data[aquifer].iloc[0, 1])
             )
+            overburden_data.index = overburden_dates
+            overburden_data = overburden_data.to_frame(name="Overburden Stress").reset_index()
 
-
-if overburden_stress_gwflow or overburden_stress_compaction:
     print("Clipping overburden stress.")
     idx_to_keep = (overburden_dates >= starttime) & (overburden_dates <= endtime)
-    # overburden_dates = overburden_dates[idx_to_keep]
-    # overburden_data = np.array(overburden_data)[idx_to_keep]
-    overburden_df = overburden_df[idx_to_keep]
+    overburden_data = overburden_data[idx_to_keep]
     print("Clipping done.")
 
     # plot overburden data
-    # plt.plot_date(overburden_dates, overburden_data)
-    # plt.plot(overburden_df.iloc[:,0].to_numpy(), overburden_df.iloc[:,1].to_numpy())
-    # plt.savefig(os.path.join(input_copy, "overburden_stress_series.png"))
-    plot_overburden_stress(overburden_df, input_copy)
+    plot_overburden_stress(overburden_data, input_copy)
 
-    # write overburden stress data to csv
-    # with open(os.path.join(input_copy, "overburden_data.csv"), "w+") as myCsv:
-    #    csvWriter = csv.writer(myCsv, delimiter=",")
-    #    csvWriter.writerows([overburden_dates, overburden_data])
-    overburden_df.to_csv(os.path.join(input_copy, "overburden_data.csv"), index=False)
+    # write overburden stress to csv
+    overburden_data.to_csv(os.path.join(input_copy, "overburden_data.csv"), index=False)
 
     print("Overburden stress calculated and saved in input_data.")
 
 effective_stress = {}
 
 # plot input head timeseries
-# plt.figure(figsize=(18, 12))
-# sns.set_style("darkgrid")
-# sns.set_context("notebook")
-# for aquifer in all_aquifers_needing_head_data:
-#    #plt.plot_date(
-#    #    head_data[aquifer][:, 0], head_data[aquifer][:, 1], label=aquifer
-#    #0)
-#    plt.plot(head_data[aquifer].iloc[:,0].to_numpy(), head_data[aquifer].iloc[:,1].to_numpy())
-# plt.ylabel("Head (masl)")
-# plt.legend()
-# plt.savefig(os.path.join(input_copy, "input_head_timeseries.png"))
-# plt.savefig(os.path.join(input_copy, "input_head_timeseries.pdf"))
-## plt.savefig(os.path.join(input_copy, "input_head_timeseries.svg"))
-# plt.close()
 plot_head_timeseries(head_data, all_aquifers_needing_head_data, input_copy)
 
 # get time at end of reading and plotting head timeseries
@@ -457,70 +426,209 @@ reading_head_time = reading_head_stop - reading_head_start
 
 if len(layers_requiring_solving) >= 0:
     print("Making input clay distribution plot.")
-    # thicknesses_tmp = []
-    # for layer in layers_requiring_solving:
-    #    if layer_types[layer] == "Aquifer":
-    #        for key in interbeds_distributions[layer].keys():
-    #            thicknesses_tmp.append(key)
-    #    if layer_types[layer] == "Aquitard":
-    #        if layer_thickness_types[layer] == "constant":
-    #            thicknesses_tmp.append(layer_thicknesses[layer])
-    #        else:
-    #            raise NotImplementedError(
-    #                "Error, aquitards with varying thickness not (yet) supported."
-    #            )
-    #
-    ## Find the smallest difference between two clay layer thicknesses. If that is greater than 1, set the bar width to be 1. Else, set the bar width to be that difference.
-    # print(thicknesses_tmp)
-    #
-    # if len(thicknesses_tmp) > 1:
-    #    diffs = [np.array(thicknesses_tmp) - t for t in thicknesses_tmp]
-    #    smallest_width = np.min(np.abs(np.array(diffs)[np.where(diffs)]))
-    # else:
-    #    smallest_width = 1
-    # if smallest_width > 0.5:
-    #    smallest_width = 0.5
-    #
-    # barwidth = smallest_width / len(layers_requiring_solving)
-    #
-    ## Make the clay distribution plot
-    # sns.set_context("poster")
-    # plt.figure(figsize=(18, 12))
-    # layeri = 0
-    # for layer in layers_requiring_solving:
-    #    if layer_types[layer] == "Aquifer":
-    #        plt.bar(
-    #            np.array(list(interbeds_distributions[layer].keys()))
-    #            + layeri * barwidth,
-    #            list(interbeds_distributions[layer].values()),
-    #            width=barwidth,
-    #            label=layer,
-    #            color="None",
-    #            edgecolor=sns.color_palette()[layeri],
-    #            linewidth=5,
-    #            alpha=0.6,
-    #        )
-    #        layeri += 1
-    #    if layer_types[layer] == "Aquitard":
-    #        plt.bar(
-    #            layer_thicknesses[layer] + layeri * barwidth,
-    #            1,
-    #            width=barwidth,
-    #            label=layer,
-    #            color="None",
-    #            edgecolor=sns.color_palette()[layeri],
-    #            linewidth=5,
-    #            alpha=0.6,
-    #        )
-    #        layeri += 1
-    # plt.legend()
-    # plt.xticks(
-    #    np.arange(0, np.max(thicknesses_tmp) + barwidth + 1, np.max([1, barwidth]))
-    # )
-    # plt.xlabel("Layer thickness (m)")
-    # plt.ylabel("Number of layers")
-    # plt.savefig(os.path.join(input_copy, "clay_distributions.png"), bbox_inches="tight")
-    # plt.close()
+    plot_clay_distributions(
+        layers_requiring_solving,
+        layer_types,
+        layer_thickness_types,
+        layer_thicknesses,
+        interbeds_distributions,
+        input_copy,
+    )
+
+# %% New section, head solver.
+print("\n\n" + "".center(80, "*"))
+print("  SOLVING FOR HEAD TIME SERIES IN CLAY LAYERS  ".center(80, "*"))
+print("".center(80, "*") + "\n")
+
+# get start time for solving for heads in clay layers
+solving_head_start = time.time()
+# time.sleep(internal_time_delay)
+#
+print("Hydrostratigraphy:")
+print("".center(60, "-"))
+for layer in layer_names:
+    text = f"{layer} ({layer_types[layer]})"
+    print(text.center(60, " "))
+    print("".center(60, "-"))
+
+print(
+    f"\n\nHead time series to be solved within the following layers: {layers_requiring_solving}"
+)
+
+inelastic_flag = {}
+inelastic_flag_compaction = {}
+Z = {}
+t_gwflow = {}
+
+head_series = copy.deepcopy(head_data)
+
+initial_condition_precons = {}
+# if save_output_head_timeseries:
+#    os.mkdir(os.path.join(outdestination, "head_outputs"))
+
+if len(all_aquifers_needing_head_data) >= 0:
+    # make input_data directory in the outdestination folder if it does not exist
+    input_copy = os.path.normpath(os.path.join(outdestination, "input_data"))
+    os.makedirs(input_copy, exist_ok=True)
+
+    head_data_files = read_parameter(
+        "head_data_files", str, len(all_aquifers_needing_head_data), paramfilelines
+    )
+
+    # create a copy of the head_data_files dictionary. values will be replaced by
+    # a numpy array of numeric dates and values from the csv file containing heads
+    head_data = copy.deepcopy(head_data_files)
+
+    for aquifer in all_aquifers_needing_head_data:
+        fileloc = head_data_files[aquifer]
+
+        print(f"File for {aquifer} specified as {fileloc}. Looking for file.")
+
+        if not os.path.isfile(fileloc):
+            raise FileNotFoundError(
+                f"Error reading head data. File {fileloc} not found."
+            )
+
+        print(f"File {fileloc} exists. Storing copy in output folder.")
+        print("Reading in head time series.")
+
+        # copy csv files to input_data folder in output directory
+        shutil.copy2(fileloc, os.path.join(input_copy, os.path.basename(fileloc)))
+
+        # read groundwater level data from csv file
+        data = pd.read_csv(fileloc, parse_dates=[0])
+
+        # TODO: need to understand why to convert dates to a number here...
+        # try:
+        #    dates = mdates.date2num(data.iloc[:, 0].values)
+        # except Exception:
+        #    print(
+        #        "Pandas couldn't parse the date head. Going to try treating the date as a float. If it's not, things may fail from hereon."
+        #    )
+        #    dates = np.array([float(ting) for ting in data.iloc[:, 0].values])
+        #    if time_unit == "years":
+        #        dates = 365 * dates
+
+        # data = data.iloc[:, 1].values
+        # head_data[aquifer] = np.array([dates, data]).T
+        head_data[aquifer] = data
+        print(f"Successfully read in. Head data for {aquifer} printing now.")
+        print(head_data[aquifer])
+        dt_headseries[aquifer] = np.diff(head_data[aquifer].iloc[:, 0])[0]
+
+    print("Reading head data complete.")
+else:
+    print("No aquifers requiring head data; skipping reading head data.")
+
+# get the starting times for each aquifer layer
+# starttimes = [
+#    np.min(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
+# ]
+starttimes = [
+    head_data[aquifer].iloc[:, 0].min() for aquifer in all_aquifers_needing_head_data
+]
+print([t.strftime("%m-%d-%Y") for t in starttimes])
+
+# start time is the maximum for all aquifer layers
+starttime = np.max(starttimes)
+
+# get ending times for each aquifer layer
+# endtimes = [
+#    np.max(head_data[aquifer][:, 0]) for aquifer in all_aquifers_needing_head_data
+# ]
+endtimes = [
+    head_data[aquifer].iloc[:, 0].max() for aquifer in all_aquifers_needing_head_data
+]
+
+# end time is the minimum for all aquifer layers
+endtime = np.min(endtimes)
+
+print("CLIPPING HEAD TIMESERIES TO HAVE CONSISTENT START/END DATES ACROSS AQUIFERS.")
+# print(
+#    f"Latest startdate found is {mdates.num2date(starttime).strftime('%d-%b-%Y')} and earliest end date is {mdates.num2date(endtime).strftime('%d-%b-%Y')}. These will be used as model start/end times."
+# )
+print(
+    f"Latest startdate found is {starttime.strftime('%d-%b-%Y')} and earliest end date is {endtime.strftime('%d-%b-%Y')}. These will be used as model start/end times."
+)
+# Clip to have common starting date
+print("Clipping input series to model starttime.")
+if MODE == "resume":
+    starttime = resume_date
+    print(
+        f"\tHead startdate is resume date; clipping series accordingly to start at {resume_date.strftime('%d-%b-%Y')}."
+    )
+
+for aquifer in all_aquifers_needing_head_data:
+    # create filter criteria for dates between the starttime and endtime
+    idx_to_keep = (head_data[aquifer].iloc[:, 0] >= starttime) & (
+        head_data[aquifer].iloc[:, 0] <= endtime
+    )
+
+    # filter head data between start time and endtime
+    head_data[aquifer] = head_data[aquifer][idx_to_keep]
+
+    print(f"Clipping for {aquifer} completed.")
+
+    if MODE == "resume":
+        if resume_head_value[aquifer] == "cst":
+            print(
+                f"Resume head value=cst. Setting head in aquifer layers to be constant at the value it was in {resume_date.strftime('%d-%b-%Y')}."
+            )
+
+            print(f"Setting head in {aquifer} to be {head_data[aquifer].iloc[:, 1][0]:.2f}.")
+            head_data[aquifer].iloc[:, 1] = head_data[aquifer].iloc[:, 1][0]
+            print(head_data[aquifer])
+
+    # write head data to csv for each aquifer layer
+    head_data[aquifer].to_csv(
+        os.path.join(input_copy, f"input_time_series_{aquifer.replace(' ', '_')}.csv"),
+        index=False,
+    )
+
+if overburden_stress_gwflow or overburden_stress_compaction:
+    for aquifer in all_aquifers_needing_head_data:
+        if aquifer == layer_names[0]:
+            print(
+                f"{aquifer} is the uppermost aquifer; therefore it is unconfined." 
+                "Calculating overburden stress from changing water levels in this aquifer."
+            )
+            unconfined_aquifer_name = aquifer
+            overburden_dates = head_data[aquifer].iloc[:, 0]
+            
+            # calculate overburden 
+            overburden_data = (
+                specific_yield
+                * rho_w
+                * g
+                * (head_data[aquifer].iloc[:, 1] - head_data[aquifer].iloc[0, 1])
+            )
+            overburden_data.index = overburden_dates
+            overburden_data = overburden_data.to_frame(name="Overburden Stress").reset_index()
+
+    print("Clipping overburden stress.")
+    idx_to_keep = (overburden_dates >= starttime) & (overburden_dates <= endtime)
+    overburden_data = overburden_data[idx_to_keep]
+    print("Clipping done.")
+
+    # plot overburden data
+    plot_overburden_stress(overburden_data, input_copy)
+
+    # write overburden stress to csv
+    overburden_data.to_csv(os.path.join(input_copy, "overburden_data.csv"), index=False)
+
+    print("Overburden stress calculated and saved in input_data.")
+
+effective_stress = {}
+
+# plot input head timeseries
+plot_head_timeseries(head_data, all_aquifers_needing_head_data, input_copy)
+
+# get time at end of reading and plotting head timeseries
+reading_head_stop = time.time()
+reading_head_time = reading_head_stop - reading_head_start
+
+if len(layers_requiring_solving) >= 0:
+    print("Making input clay distribution plot.")
     plot_clay_distributions(
         layers_requiring_solving,
         layer_types,
@@ -572,7 +680,7 @@ if len(layers_requiring_solving) >= 0:
             # get the index of the aquitard in the layer_names list
             aquitard_position = layer_names.index(layer)
 
-            # get the top and bottom boundaries using the position of the aquitard in the layer_names list
+            # get the layer names of the top and bottom boundaries using the position of the aquitard in the layer_names list
             top_boundary = layer_names[aquitard_position - 1]
             bot_boundary = layer_names[aquitard_position + 1]
 
@@ -590,1099 +698,794 @@ if len(layers_requiring_solving) >= 0:
                     f"Error solving head series. dt_master not specified for layer {layer}."
                 )
 
-            t_top = head_data[top_boundary][:, 0]
-            dt_tmp = np.diff(t_top)
+            # get times for the top boundary
+            t_top = head_data[top_boundary].iloc[:, 0].to_numpy()
+            
+            # calculate the timestep in days for all dates in the head timeseries data
+            dt_tmp = np.diff(mdates.date2num(t_top))
+            print(dt_tmp)
+            
+            # check compatibility of dt_master and dt_tmp for aquitard
+            # dt_master is a multiple of all dt_tmp for the layer
+            test1 = [n.is_integer() for n in dt_master[layer] / dt_tmp]
+            #test1 = np.all(np.mod(dt_master[layer], dt_tmp) == 0)
+            print(test1)
+            # dt_tmps are a multiple of dt_master for the layer
+            test2 = [n.is_integer() for n in dt_tmp / dt_master[layer]]
+            #test2 = np.all(np.mod(dt_tmp, dt_master[layer]) == 0)
+            print(test2)
+            # dt in the time series must be constant...if dt_tmp is monthly with units of day this doesn't appear to work
+            test3 = list(dt_tmp).count(dt_tmp[0]) != len(dt_tmp)
+            #test3 = np.all(dt_tmp == dt_tmp[0])
+            print(test3)
+
+            #if (not np.all(test1) and not np.all(test2)) or (
+            #    not list(dt_tmp).count(dt_tmp[0])
+            #) == len(dt_tmp):
+            if (not np.all(test1) and not np.all(test2)) or test3:
+                raise ValueError(
+                    f"Error solving head series. dt_master not compatible with dt in the {top_boundary} input series. "
+                    "dt_master must be an integer multiple of dt in the time series, and dt in the time series must be constant."
+                )
+
+            if dt_master[layer] >= dt_tmp[0]:
+                spacing_top = int(dt_master[layer] / dt_tmp[0])
+                top_head_tmp = head_data[top_boundary]
+
+            else:
+                print(
+                    "\t\t\tNOTE: dt_master < dt_data. Linear resampling of input head series occuring."
+                )
+                t_interp_new = 0.0001 * np.arange(
+                    10000 * min(t_top), 10000 * max(t_top) + 1, 10000 * dt_master[layer]
+                )
+                f_tmp = scipy.interpolate.interp1d(t_top, head_data[top_boundary][:, 1])
+                top_head_tmp = np.array([t_interp_new, f_tmp(t_interp_new)]).T
+                spacing_top = 1
+
+            t_bot = head_data[bot_boundary][:, 0]
+            dt_tmp = np.diff(t_bot)
             test1 = [n.is_integer() for n in dt_master[layer] / dt_tmp]
             test2 = [n.is_integer() for n in dt_tmp / dt_master[layer]]
             if (not np.all(test1) and not np.all(test2)) or (
                 not list(dt_tmp).count(dt_tmp[0])
             ) == len(dt_tmp):
                 print(
-                    f"Error solving head series. dt_master not compatible with dt in the {top_boundary} input series. "
-                    "dt_master must be an integer multiple of dt in the time series, and dt in the time series must be constant."
+                    f"\t\t\tSolving head series error: TERMINAL. dt_master not compatible with dt in the {top_boundary} "
+                    "input series. dt_master must be an integer multiple of dt in the time series. EXITING."
                 )
                 sys.exit(1)
-#            if dt_master[layer] >= dt_tmp[0]:
-#                spacing_top = int(dt_master[layer] / dt_tmp[0])
-#                top_head_tmp = head_data[top_boundary]
-#
-#            else:
-#                print(
-#                    "\t\t\tNOTE: dt_master < dt_data. Linear resampling of input head series occuring."
-#                )
-#                t_interp_new = 0.0001 * np.arange(
-#                    10000 * min(t_top), 10000 * max(t_top) + 1, 10000 * dt_master[layer]
-#                )
-#                f_tmp = scipy.interpolate.interp1d(t_top, head_data[top_boundary][:, 1])
-#                top_head_tmp = np.array([t_interp_new, f_tmp(t_interp_new)]).T
-#                spacing_top = 1
-#
-#            t_bot = head_data[bot_boundary][:, 0]
-#            dt_tmp = np.diff(t_bot)
-#            test1 = [n.is_integer() for n in dt_master[layer] / dt_tmp]
-#            test2 = [n.is_integer() for n in dt_tmp / dt_master[layer]]
-#            if (not np.all(test1) and not np.all(test2)) or (
-#                not list(dt_tmp).count(dt_tmp[0])
-#            ) == len(dt_tmp):
-#                print(
-#                    "\t\t\tSolving head series error: TERMINAL. dt_master not compatible with dt in the %s input series. dt_master must be an integer multiple of dt in the time series. EXITING."
-#                    % top_boundary
-#                )
-#                sys.exit(1)
-#            if dt_master[layer] >= dt_tmp[0]:
-#                spacing_bot = int(dt_master[layer] / dt_tmp[0])
-#                bot_head_tmp = head_data[bot_boundary]
-#            else:
-#                print(
-#                    "\t\t\tNOTE: dt_master < dt_data. Linear resampling of input head series occuring."
-#                )
-#                t_interp_new = 0.0001 * np.arange(
-#                    10000 * min(t_bot), 10000 * max(t_bot) + 1, 10000 * dt_master[layer]
-#                )
-#                f_tmp = scipy.interpolate.interp1d(t_top, head_data[bot_boundary][:, 1])
-#                bot_head_tmp = np.array([t_interp_new, f_tmp(t_interp_new)]).T
-#                spacing_bot = 1
-#
-#            if not all(t_top == t_bot):
-#                print(
-#                    "\t\t\tSolving head series error: TERMINAL. Time series in %s and %s aquifers have different dates."
-#                    % (top_boundary, bot_boundary)
-#                )
-#                print(t_top)
-#                print(t_bot)
-#                sys.exit(1)
-#            else:
-#                print("\t\t\tTime series found with correct dt and over same timespan.")
-#
-#            z = np.arange(
-#                0, layer_thicknesses[layer] + 0.00001, dz_clays[layer]
-#            )  # 0.000001 to include the stop value.
-#            Z[layer] = z
-#
-#            t_in = 0.0001 * np.arange(
-#                10000 * np.min(t_top),
-#                10000 * np.max(t_top) + 1,
-#                10000 * dt_master[layer],
-#            )  # 0.000001 to include the stop value. note that t_top and t_bot were clipped to the same yearrange when importing head data.
-#            print(t_in)
-#            t_gwflow[layer] = t_in
-#
-#            if overburden_stress_gwflow:
-#                if layer != unconfined_aquifer_name:
-#                    print("\t\tPreparing overburden stress.")
-#                    if len(overburden_dates) != len(t_in):
-#                        print("\t\t\tInterpolating overburden stress.")
-#                        f_tmp = scipy.interpolate.interp1d(
-#                            overburden_dates, overburden_data
-#                        )
-#                        overburden_data_tmp = f_tmp(t_in)
-#                        overburden_dates_tmp = t_in
-#                    else:
-#                        overburden_data_tmp = overburden_data
-#                else:
-#                    overburden_data_tmp = np.zeros_like(t_in)
-#            else:
-#                overburden_data_tmp = [0]
-#
-#            if preconsolidation_head_type == "initial_plus_offset":
-#                initial_precons = False
-#                print(
-#                    "\t\tHead initial condition is initial_plus_offset, so a constant head initial condition will be applied. Constant value is mean of surrounding aquifers."
-#                )
-#                # initial_condition_precons[layer]= (((top_head_tmp[0,1] + top_head_tmp[0,1]) / 2) * np.ones_like(z) + preconsolidation_head_offset) * rho_w * g
-#                initial_condition_precons[layer] = np.array([])
-#                initial_condition_tmp = (
-#                    (top_head_tmp[0, 1] + bot_head_tmp[0, 1]) / 2
-#                ) * np.ones_like(z) + (
-#                    preconsolidation_head_offset[top_boundary]
-#                    + preconsolidation_head_offset[bot_boundary]
-#                ) / 2
-#                print("\t\t\tinitial head value is %.2f" % initial_condition_tmp[0])
-#            #                print('\t\t\tinitial stress value is %.2f' % initial_condition_precons[layer][0])
-#            else:
-#                initial_precons = False
-#                initial_condition_tmp = (top_head_tmp[0, 1] + top_head_tmp[0, 1]) / 2
-#
-#            if MODE == "resume":
-#                initial_precons = True
-#                print(
-#                    "\t\tMode is resume. Looking for initial condition in directory %s/head_outputs."
-#                    % resume_directory
-#                )
-#                if os.path.isfile(
-#                    "%s/head_outputs/%s_head_data.nc"
-#                    % (resume_directory, layer.replace(" ", "_"))
-#                ):
-#                    print("Head found as .nc file. Reading.")
-#                    Dat = Dataset(
-#                        "%s/head_outputs/%s_head_data.nc"
-#                        % (resume_directory, layer.replace(" ", "_")),
-#                        "r",
-#                        format="CF-1.7",
-#                    )
-#                    time_bc_tmp = Dat.variables["time"][:]
-#                    head_bc_tmp = Dat.variables["z"][:]
-#                    idx_bc_tmp = np.argmin(
-#                        np.abs(matplotlib.dates.date2num(resume_date) - time_bc_tmp)
-#                    )
-#                    if (
-#                        np.min(
-#                            np.abs(matplotlib.dates.date2num(resume_date) - time_bc_tmp)
-#                        )
-#                        >= 1
-#                    ):
-#                        print(
-#                            "\tNote that you are are resuming with the initial head condition from %s, but the specified resume date was %s."
-#                            % (time_bc_tmp[idx_bc_tmp], resume_date)
-#                        )
-#                elif os.path.isfile(
-#                    "%s/head_outputs/%s_head_data.csv"
-#                    % (resume_directory, layer.replace(" ", "_"))
-#                ):
-#                    print("Head found as .csv file. Reading.")
-#                    head_bc_tmp = np.genfromtxt(
-#                        "%s/head_outputs/%s_head_data.csv"
-#                        % (resume_directory, layer.replace(" ", "_")),
-#                        delimiter=",",
-#                    )
-#                    time_bc_tmp1 = np.core.defchararray.rstrip(
-#                        np.genfromtxt(
-#                            "%s/head_outputs/%s_groundwater_solution_dates.csv"
-#                            % (resume_directory, layer.replace(" ", "_")),
-#                            dtype=str,
-#                            delimiter=",",
-#                        )
-#                    )
-#                    if (
-#                        time_bc_tmp1[0][-1] == "M"
-#                    ):  # This means it was done on Bletchley in xterm, so %c won't work as it whacks AM or PM on the end.
-#                        time_bc_tmp = matplotlib.dates.date2num(
-#                            [
-#                                datetime.datetime.strptime(
-#                                    string, "%a %d %b %Y %I:%M:%S %p"
-#                                )
-#                                for string in time_bc_tmp1
-#                            ]
-#                        )
-#                    else:
-#                        time_bc_tmp = matplotlib.dates.date2num(
-#                            [
-#                                datetime.datetime.strptime(string, "%c")
-#                                for string in time_bc_tmp1
-#                            ]
-#                        )
-#                    idx_bc_tmp = np.argmin(
-#                        np.abs(matplotlib.dates.date2num(resume_date) - time_bc_tmp)
-#                    )
-#
-#                else:
-#                    print(
-#                        "\tUnable to find head file as .nc or .csv. Something has gone wrong; aborting."
-#                    )
-#                    sys.exit(1)
-#
-#                print(
-#                    "\t\tNow looking for effective stress initial condition in directory %s."
-#                    % resume_directory
-#                )
-#                if os.path.isfile(
-#                    "%s/%seffective_stress.nc"
-#                    % (resume_directory, layer.replace(" ", "_"))
-#                ):
-#                    print("t_eff found as .nc file. Reading.")
-#                    Dat = Dataset(
-#                        "%s/%seffective_stress.nc"
-#                        % (resume_directory, layer.replace(" ", "_")),
-#                        "r",
-#                        format="CF-1.7",
-#                    )
-#                    time_teff_tmp = Dat.variables["time"][:]
-#                    teff_bc_tmp = Dat.variables["z"][:] / (
-#                        rho_w * g
-#                    )  # Get it into units of head
-#                    idx_teff_bc_tmp = np.argmin(
-#                        np.abs(matplotlib.dates.date2num(resume_date) - time_teff_tmp)
-#                    )
-#                    if (
-#                        np.min(
-#                            np.abs(
-#                                matplotlib.dates.date2num(resume_date) - time_teff_tmp
-#                            )
-#                        )
-#                        >= 1
-#                    ):
-#                        print(
-#                            "\tNote that you are are resuming with the initial t_eff condition from %s, but the specified resume date was %s."
-#                            % (time_bc_tmp[idx_bc_tmp], resume_date)
-#                        )
-#                elif os.path.isfile(
-#                    "%s/%sclayeffective_stress.csv"
-#                    % (resume_directory, layer.replace(" ", "_"))
-#                ):
-#                    print("t_eff found as .csv file. Reading.")
-#                    teff_bc_tmp = np.genfromtxt(
-#                        "%s/%seffective_stress.csv"
-#                        % (resume_directory, layer.replace(" ", "_")),
-#                        delimiter=",",
-#                    )
-#                    teff_bc_tmp = teff_bc_tmp / (rho_w * g)
-#                    time_teff_tmp1 = np.core.defchararray.rstrip(
-#                        np.genfromtxt(
-#                            "%s/head_outputs/%s_groundwater_solution_dates.csv"
-#                            % (resume_directory, layer.replace(" ", "_")),
-#                            dtype=str,
-#                            delimiter=",",
-#                        )
-#                    )
-#                    if (
-#                        time_bc_tmp1[0][-1] == "M"
-#                    ):  # This means it was done on Bletchley in xterm, so %c won't work as it whacks AM or PM on the end.
-#                        time_teff_tmp = matplotlib.dates.date2num(
-#                            [
-#                                datetime.datetime.strptime(
-#                                    string, "%a %d %b %Y %I:%M:%S %p"
-#                                )
-#                                for string in time_teff_tmp1
-#                            ]
-#                        )
-#                    else:
-#                        time_teff_tmp = matplotlib.dates.date2num(
-#                            [
-#                                datetime.datetime.strptime(string, "%c")
-#                                for string in time_teff_tmp1
-#                            ]
-#                        )
-#                    idx_teff_bc_tmp = np.argmin(
-#                        np.abs(matplotlib.dates.date2num(resume_date) - teff_bc_tmp)
-#                    )
-#
-#                    print("T_eff resume not yet coded for a csv file - abort.")
-#                    sys.exit(1)
-#                else:
-#                    print(
-#                        "\tUnable to find t_eff file as .nc or .csv. Something has gone wrong; aborting."
-#                    )
-#                    sys.exit(1)
-#
-#                initial_condition_tmp = head_bc_tmp[:, idx_bc_tmp][
-#                    ::-1
-#                ]  # The [::-1] is because aquitard head is saved upside down
-#                initial_condition_precons[layer] = np.max(
-#                    teff_bc_tmp[:, : idx_teff_bc_tmp + 1], axis=1
-#                )[::-1]
-#
-#            if groundwater_flow_solver_type[layer] == "singlevalue":
-#                hmat_tmp = solve_head_equation_singlevalue(
-#                    dt_master[layer],
-#                    t_in,
-#                    dz_clays[layer],
-#                    z,
-#                    np.vstack(
-#                        (top_head_tmp[::spacing_top, 1], top_head_tmp[::spacing_bot, 1])
-#                    ),
-#                    initial_condition_tmp,
-#                    vertical_conductivity[layer]
-#                    / (clay_Ssk[layer] + compressibility_of_water),
-#                )
-#            elif groundwater_flow_solver_type[layer] == "elastic-inelastic":
-#                t1_start = time.time()
-#                # hmat_tmp,inelastic_flag_tmp=solve_head_equation_elasticinelastic(dt_master[layer],t_interp_new,dz_clays[layer],z_tmp,np.vstack((h_aquifer_tmp_interpolated[:,1],h_aquifer_tmp_interpolated[:,1])),initial_condition_tmp,vertical_conductivity[layer]/clay_Sse[layer],vertical_conductivity[layer]/clay_Ssv[layer],overburdenstress=overburden_stress_gwflow,overburden_data=1/(rho_w * g) * np.array(overburden_data_tmp))
-#                hmat_tmp, inelastic_flag_tmp = solve_head_equation_elasticinelastic(
-#                    dt_master[layer],
-#                    t_in,
-#                    dz_clays[layer],
-#                    z,
-#                    np.vstack(
-#                        (top_head_tmp[::spacing_top, 1], bot_head_tmp[::spacing_bot, 1])
-#                    ),
-#                    initial_condition_tmp,
-#                    vertical_conductivity[layer] / clay_Sse[layer],
-#                    vertical_conductivity[layer] / clay_Ssv[layer],
-#                    overburdenstress=overburden_stress_gwflow,
-#                    overburden_data=1 / (rho_w * g) * np.array(overburden_data_tmp),
-#                    initial_precons=initial_precons,
-#                    initial_condition_precons=-initial_condition_precons[layer],
-#                )
-#                t1_stop = time.time()
-#                print("\t\t\tElapsed time in seconds:", t1_stop - t1_start)
-#
-#            head_series[layer] = hmat_tmp
-#            inelastic_flag[layer] = inelastic_flag_tmp
-#            effective_stress[layer] = (
-#                np.tile(overburden_data_tmp, (np.shape(hmat_tmp)[0], 1))
-#                - rho_w * g * hmat_tmp
-#            )
-#
-#            if save_output_head_timeseries:
-#                if np.size(inelastic_flag_tmp) >= 3e6:
-#                    if gmt:
-#                        print(
-#                            "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
-#                        )
-#                        inelastic_flag_tmp.astype(np.byte).tofile(
-#                            "%s/head_outputs/%sinelastic_flag_GWFLOW"
-#                            % (outdestination, layer.replace(" ", "_"))
-#                        )
-#                        print("\t\t\t\tConverting to netCDF format. Command is:")
-#                        cmd_tmp = (
-#                            "gmt xyz2grd %s/head_outputs/%sinelastic_flag_GWFLOW -G%s/head_outputs/%sinelastic_flag_GWFLOW.nb -I%.3f/%.5f -R%.3ft/%.3ft/%.3f/%.3f -ZTLc"
-#                            % (
-#                                outdestination,
-#                                layer.replace(" ", "_"),
-#                                outdestination,
-#                                layer.replace(" ", "_"),
-#                                dt_master[layer],
-#                                np.diff(Z[layer])[0],
-#                                np.min(t_gwflow[layer]),
-#                                np.max(t_gwflow[layer]),
-#                                np.min(Z[layer]),
-#                                np.max(Z[layer]),
-#                            )
-#                        )
-#
-#                        print(cmd_tmp)
-#                        subprocess.call(cmd_tmp, shell=True)
-#                        os.remove(
-#                            "%s/head_outputs/%sinelastic_flag_GWFLOW"
-#                            % (outdestination, layer.replace(" ", "_"))
-#                        )
-#
-#                    else:
-#                        print(
-#                            "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
-#                        )
-#                        inelastic_flag_tmp.astype(np.byte).tofile(
-#                            "%s/head_outputs/%sinelastic_flag_GWFLOW"
-#                            % (outdestination, layer.replace(" ", "_"))
-#                        )
-#
-#                else:
-#                    with open(
-#                        "%s/head_outputs/%sinelastic_flag_GWFLOW.csv"
-#                        % (outdestination, layer.replace(" ", "_")),
-#                        "w+",
-#                    ) as myCsv:
-#                        csvWriter = csv.writer(myCsv, delimiter=",")
-#                        csvWriter.writerows(inelastic_flag_tmp)
-#
-#            # dateslist = [x.strftime('%d-%b-%Y') for x in num2date(t_in)]
-#            groundwater_solution_dates[layer] = t_in
-#
-#            if overburden_stress_gwflow:
-#                effective_stress[layer] = (
-#                    np.tile(overburden_data_tmp, (np.shape(hmat_tmp)[0], 1))
-#                    - rho_w * g * hmat_tmp
-#                )
-#            else:
-#                effective_stress[layer] = np.zeros_like(hmat_tmp) - rho_w * g * hmat_tmp
-#
-#            if save_effective_stress:
-#                print("\t\tSaving effective stress and overburden stress outputs.")
-#                if overburden_stress_gwflow:
-#                    if len(overburden_data_tmp) * len(z_tmp) >= 1e6:
-#                        print(
-#                            "\t\t\tOverburden stress has more than 1 million entries; saving as 32 bit floats."
-#                        )
-#                        overburden_tmp_tosave = np.tile(
-#                            overburden_data_tmp, (len(z_tmp), 1)
-#                        )
-#                        overburden_tmp_tosave.astype(np.single).tofile(
-#                            "%s/%s_overburden_stress"
-#                            % (outdestination, layer.replace(" ", "_"))
-#                        )
-#                        if gmt:
-#                            print("\t\t\t\tConverting to netCDF format. Command is:")
-#                            cmd_tmp = (
-#                                "gmt xyz2grd %s/%s_overburden_stress -G%s/%s_overburden_stress.nc -I%.3f/%.5f -R%.3ft/%.3ft/%.3f/%.3f -ZTLf"
-#                                % (
-#                                    outdestination,
-#                                    layer.replace(" ", "_"),
-#                                    outdestination,
-#                                    layer.replace(" ", "_"),
-#                                    dt_master[layer],
-#                                    np.diff(Z[layer])[0],
-#                                    np.min(t_gwflow[layer]),
-#                                    np.max(t_gwflow[layer]),
-#                                    np.min(Z[layer]),
-#                                    np.max(Z[layer]),
-#                                )
-#                            )
-#
-#                            print(cmd_tmp)
-#                            subprocess.call(cmd_tmp, shell=True)
-#                            os.remove(
-#                                "%s/%s_overburden_stress"
-#                                % (outdestination, layer.replace(" ", "_"))
-#                            )
-#                    else:
-#                        with open(
-#                            "%s/%s_overburden_stress.csv"
-#                            % (outdestination, layer.replace(" ", "_")),
-#                            "w+",
-#                        ) as myCsv:
-#                            csvWriter = csv.writer(myCsv, delimiter=",")
-#                            csvWriter.writerows(
-#                                np.tile(overburden_data_tmp, (len(z_tmp), 1))
-#                            )
-#                else:
-#                    with open(
-#                        "%s/%s_overburden_stress.csv"
-#                        % (outdestination, layer.replace(" ", "_")),
-#                        "w+",
-#                    ) as myCsv:
-#                        csvWriter = csv.writer(myCsv, delimiter=",")
-#                        csvWriter.writerows(np.zeros_like(hmat_tmp))
-#
-#                if np.size(effective_stress[layer]) >= 1e6:
-#                    print(
-#                        "\t\t\tEffective stress has more than 1 million entries; saving as 32 bit floats."
-#                    )
-#                    effective_stress[layer].astype(np.single).tofile(
-#                        "%s/%seffective_stress"
-#                        % (outdestination, layer.replace(" ", "_"))
-#                    )
-#                    if gmt:
-#                        print("\t\t\t\tConverting to netCDF format. Command is:")
-#                        cmd_tmp = (
-#                            "gmt xyz2grd %s/%seffective_stress -G%s/%seffective_stress.nc -I%.3f/%.5f -R%.3ft/%.3ft/%.2f/%.2f -ZTLf"
-#                            % (
-#                                outdestination,
-#                                layer.replace(" ", "_"),
-#                                outdestination,
-#                                layer.replace(" ", "_"),
-#                                dt_master[layer],
-#                                np.diff(Z[layer])[0],
-#                                np.min(t_gwflow[layer]),
-#                                np.max(t_gwflow[layer]),
-#                                np.min(Z[layer]),
-#                                np.max(Z[layer]),
-#                            )
-#                        )
-#                        print(cmd_tmp)
-#                        subprocess.call(cmd_tmp, shell=True)
-#                        os.remove(
-#                            "%s/%seffective_stress"
-#                            % (outdestination, layer.replace(" ", "_"))
-#                        )
-#                else:
-#                    with open(
-#                        "%s/%seffective_stress.csv"
-#                        % (outdestination, layer.replace(" ", "_")),
-#                        "w+",
-#                    ) as myCsv:
-#                        csvWriter = csv.writer(myCsv, delimiter=",")
-#                        csvWriter.writerows(effective_stress[layer])
-#
-#        else:
-#            if layer_types[layer] == "Aquifer":
-#                head_series[layer] = dict([("Interconnected matrix", head_data[layer])])
-#                inelastic_flag[layer] = {}
-#                groundwater_solution_dates[layer] = {}
-#                Z[layer] = {}
-#                t_gwflow[layer] = {}
-#                effective_stress[layer] = {}
-#                initial_condition_precons[layer] = {}
-#                print("\t\t%s is an aquifer." % layer)
-#                if interbeds_switch[layer]:
-#                    interbeds_tmp = interbeds_distributions[layer]
-#                    bed_thicknesses_tmp = list(interbeds_tmp.keys())
-#                    print(
-#                        "\t\t%s is an aquifer with interbedded clays. Thicknesses of clays to be solved are %s"
-#                        % (layer, bed_thicknesses_tmp)
-#                    )
-#                    for thickness in bed_thicknesses_tmp:
-#                        print("")
-#                        print("\t\tSolving for thickness %.2f." % thickness)
-#                        # This bit interpolated if dt_master < dt_boundarycondition
-#
-#                        t_aquifer_tmp = head_data[layer][:, 0]
-#                        h_aquifer_tmp = head_data[layer][:, 1]
-#                        z_tmp = np.arange(
-#                            0, thickness + 0.00001, dz_clays[layer]
-#                        )  # 0.000001 to include the stop value.
-#                        t_interp_new = 0.0001 * np.arange(
-#                            10000 * min(t_aquifer_tmp),
-#                            10000 * max(t_aquifer_tmp) + 1,
-#                            10000 * dt_master[layer],
-#                        )  # The ridiculous factor of 1/10000 is to ensure the np.arange function takes integer steps. Else, floating point precision issues mean that things go wrong for timesteps less than <0.1 seconds.
-#                        f_tmp = scipy.interpolate.interp1d(t_aquifer_tmp, h_aquifer_tmp)
-#                        h_aquifer_tmp_interpolated = np.array(
-#                            [t_interp_new, f_tmp(t_interp_new)]
-#                        ).T
-#
-#                        if preconsolidation_head_type == "initial_plus_offset":
-#                            print(
-#                                "\t\tHead initial condition is initial_plus_offset, so a constant head initial condition will be applied."
-#                            )
-#                            initial_precons = False
-#                            initial_condition_tmp = (
-#                                h_aquifer_tmp[0] * np.ones_like(z_tmp)
-#                                + preconsolidation_head_offset[layer]
-#                            )
-#                            initial_condition_precons[layer][
-#                                "%.2f clays" % thickness
-#                            ] = np.array([])
-#                            print(
-#                                "\t\tinitial head value is %.2f"
-#                                % initial_condition_tmp[0]
-#                            )
-#                        #   print('\t\tinitial stress value is %.2f' % initial_condition_precons[layer]['%.2f clays' % thickness][0])
-#
-#                        else:
-#                            initial_precons = False
-#                            initial_condition_precons[layer][
-#                                "%.2f clays" % thickness
-#                            ] = np.array([])
-#                            initial_condition_tmp = h_aquifer_tmp[0]
-#
-#                        if MODE == "resume":
-#                            initial_precons = True
-#                            print(
-#                                "\t\tMode is resume. Looking for initial condition in directory %s/head_outputs."
-#                                % resume_directory
-#                            )
-#                            if os.path.isfile(
-#                                "%s/head_outputs/%s_%sclay_head_data.nc"
-#                                % (
-#                                    resume_directory,
-#                                    layer.replace(" ", "_"),
-#                                    "%.2f" % thickness,
-#                                )
-#                            ):
-#                                print("Head found as .nc file. Reading.")
-#                                Dat = Dataset(
-#                                    "%s/head_outputs/%s_%sclay_head_data.nc"
-#                                    % (
-#                                        resume_directory,
-#                                        layer.replace(" ", "_"),
-#                                        "%.2f" % thickness,
-#                                    ),
-#                                    "r",
-#                                    format="CF-1.7",
-#                                )
-#                                time_bc_tmp = Dat.variables["time"][:]
-#                                head_bc_tmp = Dat.variables["z"][:]
-#                                idx_bc_tmp = np.argmin(
-#                                    np.abs(
-#                                        matplotlib.dates.date2num(resume_date)
-#                                        - time_bc_tmp
-#                                    )
-#                                )
-#                                if (
-#                                    np.min(
-#                                        np.abs(
-#                                            matplotlib.dates.date2num(resume_date)
-#                                            - time_bc_tmp
-#                                        )
-#                                    )
-#                                    >= 1
-#                                ):
-#                                    print(
-#                                        "\tNote that you are are resuming with the initial head condition from %s, but the specified resume date was %s."
-#                                        % (time_bc_tmp[idx_bc_tmp], resume_date)
-#                                    )
-#                            elif os.path.isfile(
-#                                "%s/head_outputs/%s_%sclay_head_data.csv"
-#                                % (
-#                                    resume_directory,
-#                                    layer.replace(" ", "_"),
-#                                    "%.2f" % thickness,
-#                                )
-#                            ):
-#                                print("Head found as .csv file. Reading.")
-#                                head_bc_tmp = np.genfromtxt(
-#                                    "%s/head_outputs/%s_%sclay_head_data.csv"
-#                                    % (
-#                                        resume_directory,
-#                                        layer.replace(" ", "_"),
-#                                        "%.2f" % thickness,
-#                                    ),
-#                                    delimiter=",",
-#                                )
-#                                time_bc_tmp1 = np.core.defchararray.rstrip(
-#                                    np.genfromtxt(
-#                                        "%s/head_outputs/%s_groundwater_solution_dates.csv"
-#                                        % (resume_directory, layer.replace(" ", "_")),
-#                                        dtype=str,
-#                                        delimiter=",",
-#                                    )
-#                                )
-#                                if (
-#                                    time_bc_tmp1[0][-1] == "M"
-#                                ):  # This means it was done on Bletchley in xterm, so %c won't work as it whacks AM or PM on the end.
-#                                    time_bc_tmp = matplotlib.dates.date2num(
-#                                        [
-#                                            datetime.datetime.strptime(
-#                                                string, "%a %d %b %Y %I:%M:%S %p"
-#                                            )
-#                                            for string in time_bc_tmp1
-#                                        ]
-#                                    )
-#                                else:
-#                                    time_bc_tmp = matplotlib.dates.date2num(
-#                                        [
-#                                            datetime.datetime.strptime(string, "%c")
-#                                            for string in time_bc_tmp1
-#                                        ]
-#                                    )
-#                                idx_bc_tmp = np.argmin(
-#                                    np.abs(
-#                                        matplotlib.dates.date2num(resume_date)
-#                                        - time_bc_tmp
-#                                    )
-#                                )
-#
-#                            else:
-#                                print(
-#                                    "\tUnable to find head file as .nc or .csv. Something has gone wrong; aborting."
-#                                )
-#                                sys.exit(1)
-#
-#                            print(
-#                                "\t\tNow looking for effective stress initial condition in directory %s."
-#                                % resume_directory
-#                            )
-#                            if os.path.isfile(
-#                                "%s/%s_%sclayeffective_stress.nc"
-#                                % (
-#                                    resume_directory,
-#                                    layer.replace(" ", "_"),
-#                                    "%.2f" % thickness,
-#                                )
-#                            ):
-#                                print("t_eff found as .nc file. Reading.")
-#                                Dat = Dataset(
-#                                    "%s/%s_%sclayeffective_stress.nc"
-#                                    % (
-#                                        resume_directory,
-#                                        layer.replace(" ", "_"),
-#                                        "%.2f" % thickness,
-#                                    ),
-#                                    "r",
-#                                    format="CF-1.7",
-#                                )
-#                                time_teff_tmp = Dat.variables["time"][:]
-#                                teff_bc_tmp = Dat.variables["z"][:] / (
-#                                    rho_w * g
-#                                )  # Get it into units of head
-#                                idx_teff_bc_tmp = np.argmin(
-#                                    np.abs(
-#                                        matplotlib.dates.date2num(resume_date)
-#                                        - time_teff_tmp
-#                                    )
-#                                )
-#                                if (
-#                                    np.min(
-#                                        np.abs(
-#                                            matplotlib.dates.date2num(resume_date)
-#                                            - time_teff_tmp
-#                                        )
-#                                    )
-#                                    >= 1
-#                                ):
-#                                    print(
-#                                        "\tNote that you are are resuming with the initial t_eff condition from %s, but the specified resume date was %s."
-#                                        % (time_bc_tmp[idx_bc_tmp], resume_date)
-#                                    )
-#                            elif os.path.isfile(
-#                                "%s/%s_%sclayeffective_stress.csv"
-#                                % (
-#                                    resume_directory,
-#                                    layer.replace(" ", "_"),
-#                                    "%.1f" % thickness,
-#                                )
-#                            ):
-#                                print("t_eff found as .csv file. Reading.")
-#                                teff_bc_tmp = np.genfromtxt(
-#                                    "%s/%s_%sclayeffective_stress.csv"
-#                                    % (
-#                                        resume_directory,
-#                                        layer.replace(" ", "_"),
-#                                        "%.1f" % thickness,
-#                                    ),
-#                                    delimiter=",",
-#                                )
-#                                teff_bc_tmp = teff_bc_tmp / (rho_w * g)
-#                                time_teff_tmp1 = np.core.defchararray.rstrip(
-#                                    np.genfromtxt(
-#                                        "%s/head_outputs/%s_groundwater_solution_dates.csv"
-#                                        % (resume_directory, layer.replace(" ", "_")),
-#                                        dtype=str,
-#                                        delimiter=",",
-#                                    )
-#                                )
-#                                if (
-#                                    time_teff_tmp1[0][-1] == "M"
-#                                ):  # This means it was done on Bletchley in xterm, so %c won't work as it whacks AM or PM on the end.
-#                                    time_teff_tmp = matplotlib.dates.date2num(
-#                                        [
-#                                            datetime.datetime.strptime(
-#                                                string, "%a %d %b %Y %I:%M:%S %p"
-#                                            )
-#                                            for string in time_teff_tmp1
-#                                        ]
-#                                    )
-#                                else:
-#                                    time_teff_tmp = matplotlib.dates.date2num(
-#                                        [
-#                                            datetime.datetime.strptime(string, "%c")
-#                                            for string in time_teff_tmp1
-#                                        ]
-#                                    )
-#                                idx_teff_bc_tmp = np.argmin(
-#                                    np.abs(
-#                                        matplotlib.dates.date2num(resume_date)
-#                                        - teff_bc_tmp
-#                                    )
-#                                )
-#                            else:
-#                                print(
-#                                    "\tUnable to find t_eff file as .nc or .csv. Something has gone wrong; aborting."
-#                                )
-#                                sys.exit(1)
-#
-#                            initial_condition_tmp = head_bc_tmp[:, idx_bc_tmp]
-#                            initial_condition_precons[layer][
-#                                "%.2f clays" % thickness
-#                            ] = np.max(teff_bc_tmp[:, : idx_teff_bc_tmp + 1], axis=1)
-#
-#                        if overburden_stress_gwflow:
-#                            if layer != unconfined_aquifer_name:
-#                                if len(overburden_dates) != len(t_interp_new):
-#                                    print("\t\t\tInterpolating overburden stress.")
-#                                    f_tmp = scipy.interpolate.interp1d(
-#                                        overburden_dates, overburden_data
-#                                    )
-#                                    overburden_data_tmp = f_tmp(t_interp_new)
-#                                    overburden_dates_tmp = t_interp_new
-#                                else:
-#                                    overburden_data_tmp = overburden_data
-#                            else:
-#                                print(
-#                                    "\t\t\tThis is the unconfined aquifer; overburden still being included."
-#                                )
-#                                if len(overburden_dates) != len(t_interp_new):
-#                                    print("\t\t\tInterpolating overburden stress.")
-#                                    f_tmp = scipy.interpolate.interp1d(
-#                                        overburden_dates, overburden_data
-#                                    )
-#                                    overburden_data_tmp = f_tmp(t_interp_new)
-#                                    overburden_dates_tmp = t_interp_new
-#                                else:
-#                                    overburden_data_tmp = overburden_data
-#
-#                                # overburden_data_tmp = np.zeros_like(t_interp_new)
-#                        else:
-#                            overburden_data_tmp = [0]
-#
-#                        t1_start = time.time()
-#                        (
-#                            hmat_tmp,
-#                            inelastic_flag_tmp,
-#                        ) = solve_head_equation_elasticinelastic(
-#                            dt_master[layer],
-#                            t_interp_new,
-#                            dz_clays[layer],
-#                            z_tmp,
-#                            np.vstack(
-#                                (
-#                                    h_aquifer_tmp_interpolated[:, 1],
-#                                    h_aquifer_tmp_interpolated[:, 1],
-#                                )
-#                            ),
-#                            initial_condition_tmp,
-#                            vertical_conductivity[layer] / clay_Sse[layer],
-#                            vertical_conductivity[layer] / clay_Ssv[layer],
-#                            overburdenstress=overburden_stress_gwflow,
-#                            overburden_data=1
-#                            / (rho_w * g)
-#                            * np.array(overburden_data_tmp),
-#                            initial_precons=initial_precons,
-#                            initial_condition_precons=-initial_condition_precons[layer][
-#                                "%.2f clays" % thickness
-#                            ],
-#                        )
-#                        t1_stop = time.time()
-#                        print("\t\t\tElapsed time in seconds:", t1_stop - t1_start)
-#                        head_series[layer]["%.2f clays" % thickness] = hmat_tmp
-#                        inelastic_flag[layer][
-#                            "%.2f clays" % thickness
-#                        ] = inelastic_flag_tmp
-#                        t_gwflow[layer]["%.2f clays" % thickness] = t_interp_new
-#                        Z[layer]["%.2f clays" % thickness] = z_tmp
-#
-#                        if save_output_head_timeseries:
-#                            if np.size(inelastic_flag_tmp) >= 3e6:
-#                                if gmt:
-#                                    print(
-#                                        "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
-#                                    )
-#                                    inelastic_flag_tmp.astype(np.byte).tofile(
-#                                        "%s/head_outputs/%s_%sclayinelastic_flag_GWFLOW"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            "%.2f" % thickness,
-#                                        )
-#                                    )
-#                                    print(
-#                                        "\t\t\t\tConverting to netCDF format. Command is:"
-#                                    )
-#                                    cmd_tmp = (
-#                                        "gmt xyz2grd %s/head_outputs/%s_%sclayinelastic_flag_GWFLOW -G%s/head_outputs/%s_%sclayinelastic_flag_GWFLOW.nb -I%.3f/%.5f -R%.3ft/%.3ft/%.3f/%.3f -ZTLc"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            "%.2f" % thickness,
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            "%.2f" % thickness,
-#                                            dt_master[layer],
-#                                            np.diff(Z[layer]["%.2f clays" % thickness])[
-#                                                0
-#                                            ],
-#                                            np.min(
-#                                                t_gwflow[layer][
-#                                                    "%.2f clays" % thickness
-#                                                ]
-#                                            ),
-#                                            np.max(
-#                                                t_gwflow[layer][
-#                                                    "%.2f clays" % thickness
-#                                                ]
-#                                            ),
-#                                            np.min(Z[layer]["%.2f clays" % thickness]),
-#                                            np.max(Z[layer]["%.2f clays" % thickness]),
-#                                        )
-#                                    )
-#
-#                                    print(cmd_tmp)
-#                                    subprocess.call(cmd_tmp, shell=True)
-#                                    os.remove(
-#                                        "%s/head_outputs/%s_%sclayinelastic_flag_GWFLOW"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            "%.2f" % thickness,
-#                                        )
-#                                    )
-#
-#                                else:
-#                                    print(
-#                                        "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
-#                                    )
-#                                    inelastic_flag_tmp.astype(np.byte).tofile(
-#                                        "%s/head_outputs/%s_%sclayinelastic_flag_GWFLOW"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            "%.2f" % thickness,
-#                                        )
-#                                    )
-#
-#                            else:
-#                                with open(
-#                                    "%s/head_outputs/%s_%sclayinelastic_flag_GWFLOW.csv"
-#                                    % (
-#                                        outdestination,
-#                                        layer.replace(" ", "_"),
-#                                        "%.2f" % thickness,
-#                                    ),
-#                                    "w+",
-#                                ) as myCsv:
-#                                    csvWriter = csv.writer(myCsv, delimiter=",")
-#                                    csvWriter.writerows(inelastic_flag_tmp)
-#
-#                        # dateslist = [x.strftime('%d-%b-%Y') for x in num2date(t_interp_new)]
-#                        groundwater_solution_dates[layer][
-#                            "%.2f clays" % thickness
-#                        ] = t_interp_new
-#
-#                        if overburden_stress_gwflow:
-#                            effective_stress[layer]["%.2f clays" % thickness] = (
-#                                np.tile(overburden_data_tmp, (np.shape(hmat_tmp)[0], 1))
-#                                - rho_w * g * hmat_tmp
-#                            )
-#                        else:
-#                            effective_stress[layer]["%.2f clays" % thickness] = (
-#                                np.zeros_like(hmat_tmp) - rho_w * g * hmat_tmp
-#                            )
-#
-#                        if save_effective_stress:
-#                            print(
-#                                "\t\tSaving effective stress and overburden stress outputs."
-#                            )
-#                            if (
-#                                np.size(
-#                                    effective_stress[layer]["%.2f clays" % thickness]
-#                                )
-#                                >= 1e6
-#                            ):
-#                                print(
-#                                    "\t\t\tEffective stress has more than 1 million entries; saving as 32 bit floats."
-#                                )
-#                                effective_stress[layer][
-#                                    "%.2f clays" % thickness
-#                                ].astype(np.single).tofile(
-#                                    "%s/%s_%sclayeffective_stress"
-#                                    % (
-#                                        outdestination,
-#                                        layer.replace(" ", "_"),
-#                                        thickness,
-#                                    )
-#                                )
-#                                if gmt:
-#                                    print(
-#                                        "\t\t\t\tConverting to netCDF format. Command is:"
-#                                    )
-#                                    cmd_tmp = (
-#                                        "gmt xyz2grd %s/%s_%sclayeffective_stress -G%s/%s_%sclayeffective_stress.nc -I%.3f/%.5f -R%.3ft/%.3ft/%.2f/%.2f -ZTLf"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            thickness,
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            "%.2f" % thickness,
-#                                            dt_master[layer],
-#                                            np.diff(Z[layer]["%.2f clays" % thickness])[
-#                                                0
-#                                            ],
-#                                            np.min(
-#                                                t_gwflow[layer][
-#                                                    "%.2f clays" % thickness
-#                                                ]
-#                                            ),
-#                                            np.max(
-#                                                t_gwflow[layer][
-#                                                    "%.2f clays" % thickness
-#                                                ]
-#                                            ),
-#                                            np.min(Z[layer]["%.2f clays" % thickness]),
-#                                            np.max(Z[layer]["%.2f clays" % thickness]),
-#                                        )
-#                                    )
-#
-#                                    print(cmd_tmp)
-#                                    subprocess.call(cmd_tmp, shell=True)
-#                                    os.remove(
-#                                        "%s/%s_%sclayeffective_stress"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            thickness,
-#                                        )
-#                                    )
-#                            else:
-#                                with open(
-#                                    "%s/%s_%sclayeffective_stress.csv"
-#                                    % (
-#                                        outdestination,
-#                                        layer.replace(" ", "_"),
-#                                        thickness,
-#                                    ),
-#                                    "w+",
-#                                ) as myCsv:
-#                                    csvWriter = csv.writer(myCsv, delimiter=",")
-#                                    csvWriter.writerows(
-#                                        effective_stress[layer][
-#                                            "%.2f clays" % thickness
-#                                        ]
-#                                    )
-#
-#                            if overburden_stress_gwflow:
-#                                if len(overburden_data_tmp) * len(z_tmp) >= 1e6:
-#                                    print(
-#                                        "\t\t\tOverburden stress has more than 1 million entries; saving as 32 bit floats."
-#                                    )
-#                                    overburden_tmp_tosave = np.tile(
-#                                        overburden_data_tmp, (len(z_tmp), 1)
-#                                    )
-#                                    overburden_tmp_tosave.astype(np.single).tofile(
-#                                        "%s/%s_%sclay_overburden_stress"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            thickness,
-#                                        )
-#                                    )
-#                                    if gmt:
-#                                        print(
-#                                            "\t\t\t\tConverting to netCDF format. Command is:"
-#                                        )
-#                                        cmd_tmp = (
-#                                            "gmt xyz2grd %s/%s_%sclay_overburden_stress -G%s/%s_%sclay_overburden_stress.nc -I%.3f/%.5f -R%.3ft/%.3ft/%.3f/%.3f -ZTLf"
-#                                            % (
-#                                                outdestination,
-#                                                layer.replace(" ", "_"),
-#                                                thickness,
-#                                                outdestination,
-#                                                layer.replace(" ", "_"),
-#                                                "%.2f" % thickness,
-#                                                dt_master[layer],
-#                                                np.diff(
-#                                                    Z[layer]["%.2f clays" % thickness]
-#                                                )[0],
-#                                                np.min(
-#                                                    t_gwflow[layer][
-#                                                        "%.2f clays" % thickness
-#                                                    ]
-#                                                ),
-#                                                np.max(
-#                                                    t_gwflow[layer][
-#                                                        "%.2f clays" % thickness
-#                                                    ]
-#                                                ),
-#                                                np.min(
-#                                                    Z[layer]["%.2f clays" % thickness]
-#                                                ),
-#                                                np.max(
-#                                                    Z[layer]["%.2f clays" % thickness]
-#                                                ),
-#                                            )
-#                                        )
-#
-#                                        print(cmd_tmp)
-#                                        subprocess.call(cmd_tmp, shell=True)
-#                                        os.remove(
-#                                            "%s/%s_%sclay_overburden_stress"
-#                                            % (
-#                                                outdestination,
-#                                                layer.replace(" ", "_"),
-#                                                thickness,
-#                                            )
-#                                        )
-#                                else:
-#                                    with open(
-#                                        "%s/%s_%sclay_overburden_stress.csv"
-#                                        % (
-#                                            outdestination,
-#                                            layer.replace(" ", "_"),
-#                                            thickness,
-#                                        ),
-#                                        "w+",
-#                                    ) as myCsv:
-#                                        csvWriter = csv.writer(myCsv, delimiter=",")
-#                                        csvWriter.writerows(
-#                                            np.tile(
-#                                                overburden_data_tmp, (len(z_tmp), 1)
-#                                            )
-#                                        )
-#
-#                else:
-#                    print(
-#                        "\t%s is an aquifer with no interbedded clays. No solution required."
-#                    )
-#
-# else:
-#    print(
-#        "No layers require head time series solutions; skipping solving for head time series in clay layers."
-#    )
-#
-# solving_head_stop = time.time()
-# solving_head_time = solving_head_stop - solving_head_start
+            if dt_master[layer] >= dt_tmp[0]:
+                spacing_bot = int(dt_master[layer] / dt_tmp[0])
+                bot_head_tmp = head_data[bot_boundary]
+            else:
+                print(
+                    "\t\t\tNOTE: dt_master < dt_data. Linear resampling of input head series occuring."
+                )
+                t_interp_new = 0.0001 * np.arange(
+                    10000 * min(t_bot), 10000 * max(t_bot) + 1, 10000 * dt_master[layer]
+                )
+                f_tmp = scipy.interpolate.interp1d(t_top, head_data[bot_boundary][:, 1])
+                bot_head_tmp = np.array([t_interp_new, f_tmp(t_interp_new)]).T
+                spacing_bot = 1
 
-## %% New section, saving head outputs.
+            if not all(t_top == t_bot):
+                print(
+                    f"\t\t\tSolving head series error: TERMINAL. Time series in {top_boundary} and {bot_boundary} aquifers have different dates."
+                )
+                print(t_top)
+                print(t_bot)
+                sys.exit(1)
+            else:
+                print("\t\t\tTime series found with correct dt and over same timespan.")
+
+            z = np.arange(
+                0, layer_thicknesses[layer] + 0.00001, dz_clays[layer]
+            )  # 0.000001 to include the stop value.
+            Z[layer] = z
+
+            t_in = 0.0001 * np.arange(
+                10000 * np.min(t_top),
+                10000 * np.max(t_top) + 1,
+                10000 * dt_master[layer],
+            )  # 0.000001 to include the stop value. note that t_top and t_bot were clipped to the same yearrange when importing head data.
+            print(t_in)
+            t_gwflow[layer] = t_in
+
+            if overburden_stress_gwflow:
+                if layer != unconfined_aquifer_name:
+                    print("\t\tPreparing overburden stress.")
+                    if len(overburden_dates) != len(t_in):
+                        print("\t\t\tInterpolating overburden stress.")
+                        f_tmp = scipy.interpolate.interp1d(
+                            overburden_dates, overburden_data
+                        )
+                        overburden_data_tmp = f_tmp(t_in)
+                        overburden_dates_tmp = t_in
+                    else:
+                        overburden_data_tmp = overburden_data
+                else:
+                    overburden_data_tmp = np.zeros_like(t_in)
+            else:
+                overburden_data_tmp = [0]
+
+            if preconsolidation_head_type == "initial_plus_offset":
+                initial_precons = False
+                print(
+                    "\t\tHead initial condition is initial_plus_offset, so a constant head initial condition "
+                    "will be applied. Constant value is mean of surrounding aquifers."
+                )
+
+                initial_condition_precons[layer] = np.array([])
+                initial_condition_tmp = (
+                    (top_head_tmp[0, 1] + bot_head_tmp[0, 1]) / 2
+                ) * np.ones_like(z) + (
+                    preconsolidation_head_offset[top_boundary]
+                    + preconsolidation_head_offset[bot_boundary]
+                ) / 2
+                print(f"\t\t\tinitial head value is {initial_condition_tmp[0]:.2f}")
+
+            else:
+                initial_precons = False
+                initial_condition_tmp = (top_head_tmp[0, 1] + top_head_tmp[0, 1]) / 2
+
+            if MODE == "resume":
+                initial_precons = True
+                print(
+                    f"\t\tMode is resume. Looking for initial condition in directory {resume_directory}/head_outputs."
+                )
+                nc_file_path = f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_head_data.nc"
+                csv_file_path = f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_head_data.csv"
+
+                if os.path.isfile(nc_file_path):
+                    print("Head found as .nc file. Reading.")
+                    Dat = Dataset(nc_file_path, "r", format="CF-1.7")
+                    time_bc_tmp = Dat.variables["time"][:]
+                    head_bc_tmp = Dat.variables["z"][:]
+                    idx_bc_tmp = np.argmin(np.abs(mdates.date2num(resume_date) - time_bc_tmp))
+                    if np.min(np.abs(mdates.date2num(resume_date) - time_bc_tmp)) >= 1:
+                        print(
+                            f"\tNote that you are resuming with the initial head condition from {time_bc_tmp[idx_bc_tmp]}, but the specified resume date was {resume_date}."
+                        )
+                elif os.path.isfile(csv_file_path):
+                    print("Head found as .csv file. Reading.")
+                    head_bc_tmp = np.genfromtxt(csv_file_path, delimiter=",")
+                    time_bc_tmp1 = np.core.defchararray.rstrip(
+                        np.genfromtxt(
+                            f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
+                            dtype=str,
+                            delimiter=",",
+                        )
+                    )
+                    if time_bc_tmp1[0][-1] == "M":
+                        time_bc_tmp = mdates.date2num(
+                            [
+                                datetime.datetime.strptime(string, "%a %d %b %Y %I:%M:%S %p") for string in time_bc_tmp1
+                            ]
+                        )
+                    else:
+                        time_bc_tmp = mdates.date2num(
+                            [datetime.datetime.strptime(string, "%c") for string in time_bc_tmp1]
+                        )
+                    idx_bc_tmp = np.argmin(np.abs(mdates.date2num(resume_date) - time_bc_tmp))
+                else:
+                    print("\tUnable to find head file as .nc or .csv. Something has gone wrong; aborting.")
+                    sys.exit(1)
+
+                print(
+                    f"\t\tNow looking for effective stress initial condition in directory {resume_directory}."
+                )
+                if os.path.isfile(
+                    f"{resume_directory}/{layer.replace(' ', '_')}effective_stress.nc"
+                ):
+                    print("t_eff found as .nc file. Reading.")
+                    Dat = Dataset(
+                        f"{resume_directory}/{layer.replace(' ', '_')}effective_stress.nc",
+                        "r",
+                        format="CF-1.7",
+                    )
+                    time_teff_tmp = Dat.variables["time"][:]
+                    teff_bc_tmp = Dat.variables["z"][:] / (
+                        rho_w * g
+                    )  # Get it into units of head
+                    idx_teff_bc_tmp = np.argmin(
+                        np.abs(mdates.date2num(resume_date) - time_teff_tmp)
+                    )
+                    if (np.min(np.abs(mdates.date2num(resume_date) - time_teff_tmp)) >= 1):
+                        print(
+                            "\tNote that you are resuming with the initial t_eff condition from "
+                            f"{time_bc_tmp[idx_bc_tmp]}, but the specified resume date was {resume_date}."
+                        )
+                elif os.path.isfile(
+                    f"{resume_directory}/{layer.replace(' ', '_')}clayeffective_stress.csv"
+                ):
+                    print("t_eff found as .csv file. Reading.")
+                    teff_bc_tmp = np.genfromtxt(
+                        f"{resume_directory}/{layer.replace(' ', '_')}effective_stress.csv",
+                        delimiter=",",
+                    )
+                    teff_bc_tmp = teff_bc_tmp / (rho_w * g)
+                    time_teff_tmp1 = np.core.defchararray.rstrip(
+                        np.genfromtxt(
+                            f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
+                            dtype=str,
+                            delimiter=",",
+                        )
+                    )
+                    if (
+                        time_bc_tmp1[0][-1] == "M"
+                    ):  # This means it was done on Bletchley in xterm, so %c won't work as it whacks AM or PM on the end.
+                        time_teff_tmp = mdates.date2num(
+                            [
+                                datetime.datetime.strptime(
+                                    string, "%a %d %b %Y %I:%M:%S %p"
+                                )
+                                for string in time_teff_tmp1
+                            ]
+                        )
+                    else:
+                        time_teff_tmp = mdates.date2num(
+                            [
+                                datetime.datetime.strptime(string, "%c")
+                                for string in time_teff_tmp1
+                            ]
+                        )
+                    idx_teff_bc_tmp = np.argmin(
+                        np.abs(mdates.date2num(resume_date) - teff_bc_tmp)
+                    )
+
+                    print("T_eff resume not yet coded for a csv file - abort.")
+                    sys.exit(1)
+                else:
+                    print(
+                        "\tUnable to find t_eff file as .nc or .csv. Something has gone wrong; aborting."
+                    )
+                    sys.exit(1)
+
+                initial_condition_tmp = head_bc_tmp[:, idx_bc_tmp][
+                    ::-1
+                ]  # The [::-1] is because aquitard head is saved upside down
+                initial_condition_precons[layer] = np.max(
+                    teff_bc_tmp[:, : idx_teff_bc_tmp + 1], axis=1
+                )[::-1]
+
+            if groundwater_flow_solver_type[layer] == "singlevalue":
+                hmat_tmp = solve_head_equation_singlevalue(
+                    dt_master[layer],
+                    t_in,
+                    dz_clays[layer],
+                    z,
+                    np.vstack(
+                        (top_head_tmp[::spacing_top, 1], top_head_tmp[::spacing_bot, 1])
+                    ),
+                    initial_condition_tmp,
+                    vertical_conductivity[layer]
+                    / (clay_Ssk[layer] + compressibility_of_water),
+                )
+            elif groundwater_flow_solver_type[layer] == "elastic-inelastic":
+                t1_start = time.time()
+                # solve the elasticinelastic head equation
+                hmat_tmp, inelastic_flag_tmp = solve_head_equation_elasticinelastic(
+                    dt_master[layer],
+                    t_in,
+                    dz_clays[layer],
+                    z,
+                    np.vstack(
+                        (top_head_tmp[::spacing_top, 1], bot_head_tmp[::spacing_bot, 1])
+                    ),
+                    initial_condition_tmp,
+                    vertical_conductivity[layer] / clay_Sse[layer],
+                    vertical_conductivity[layer] / clay_Ssv[layer],
+                    overburdenstress=overburden_stress_gwflow,
+                    overburden_data=1 / (rho_w * g) * np.array(overburden_data_tmp),
+                    initial_precons=initial_precons,
+                    initial_condition_precons=-initial_condition_precons[layer],
+                )
+                t1_stop = time.time()
+                print("\t\t\tElapsed time in seconds:", t1_stop - t1_start)
+
+            head_series[layer] = hmat_tmp
+            inelastic_flag[layer] = inelastic_flag_tmp
+            effective_stress[layer] = (
+                np.tile(overburden_data_tmp, (np.shape(hmat_tmp)[0], 1))
+                - rho_w * g * hmat_tmp
+            )
+
+            if save_output_head_timeseries:
+                if np.size(inelastic_flag_tmp) >= 3e6:
+                    if gmt:
+                        print(
+                            "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
+                        )
+                        inelastic_flag_tmp.astype(np.byte).tofile(
+                            f"{outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW"
+                        )
+                        print("\t\t\t\tConverting to netCDF format. Command is:")
+                        cmd_tmp = (
+                            f"gmt xyz2grd {outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW "
+                            f"-G{outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW.nb "
+                            f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer])[0]:.5f} "
+                            f"-R{np.min(t_gwflow[layer]):.3f}/{np.max(t_gwflow[layer]):.3f}/"
+                            f"{np.min(Z[layer]):.3f}/{np.max(Z[layer]):.3f}"
+                            "-ZTLc"
+                        )
+
+                        print(cmd_tmp)
+                        subprocess.call(cmd_tmp, shell=True)
+                        os.remove(
+                            f"{outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW"
+                        )
+
+                    else:
+                        print(
+                            "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
+                        )
+                        inelastic_flag_tmp.astype(np.byte).tofile(
+                            f"{outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW"
+                        )
+
+                else:
+                    with open(
+                        f"{outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW.csv",
+                        "w+",
+                    ) as myCsv:
+                        csvWriter = csv.writer(myCsv, delimiter=",")
+                        csvWriter.writerows(inelastic_flag_tmp)
+
+            # dateslist = [x.strftime('%d-%b-%Y') for x in num2date(t_in)]
+            groundwater_solution_dates[layer] = t_in
+
+            if overburden_stress_gwflow:
+                effective_stress[layer] = (
+                    np.tile(overburden_data_tmp, (np.shape(hmat_tmp)[0], 1))
+                    - rho_w * g * hmat_tmp
+                )
+            else:
+                effective_stress[layer] = np.zeros_like(hmat_tmp) - rho_w * g * hmat_tmp
+
+            if save_effective_stress:
+                print("\t\tSaving effective stress and overburden stress outputs.")
+                if overburden_stress_gwflow:
+                    if len(overburden_data_tmp) * len(z_tmp) >= 1e6:
+                        print(
+                            "\t\t\tOverburden stress has more than 1 million entries; saving as 32 bit floats."
+                        )
+                        overburden_tmp_tosave = np.tile(
+                            overburden_data_tmp, (len(z_tmp), 1)
+                        )
+                        overburden_tmp_tosave.astype(np.single).tofile(
+                            f"{outdestination}/{layer.replace(' ', '_')}_overburden_stress"
+                        )
+                        if gmt:
+                            print("\t\t\t\tConverting to netCDF format. Command is:")
+                            cmd_tmp = (
+                                f"gmt xyz2grd {outdestination}/{layer.replace(' ', '_')}_overburden_stress "
+                                f"-G{outdestination}/{layer.replace(' ', '_')}_overburden_stress.nc "
+                                f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer])[0]:.5f} "
+                                f"-R{np.min(t_gwflow[layer]):.3f}/{np.max(t_gwflow[layer]):.3f}/"
+                                f"{np.min(Z[layer]):.3f}/{np.max(Z[layer]):.3f}"
+                                "-ZTLf"
+                            )
+
+                            print(cmd_tmp)
+                            subprocess.call(cmd_tmp, shell=True)
+                            os.remove(
+                                f"{outdestination}/{layer.replace(' ', '_')}_overburden_stress"
+                            )
+                    else:
+                        with open(
+                            f"{outdestination}/{layer.replace(' ', '_')}_overburden_stress.csv",
+                            "w+",
+                        ) as myCsv:
+                            csvWriter = csv.writer(myCsv, delimiter=",")
+                            csvWriter.writerows(
+                                np.tile(overburden_data_tmp, (len(z_tmp), 1))
+                            )
+                else:
+                    with open(
+                        f"{outdestination}/{layer.replace(' ', '_')}_overburden_stress.csv",
+                        "w+",
+                    ) as myCsv:
+                        csvWriter = csv.writer(myCsv, delimiter=",")
+                        csvWriter.writerows(np.zeros_like(hmat_tmp))
+
+                if np.size(effective_stress[layer]) >= 1e6:
+                    print(
+                        "\t\t\tEffective stress has more than 1 million entries; saving as 32 bit floats."
+                    )
+                    effective_stress[layer].astype(np.single).tofile(
+                        f"{outdestination}/{layer.replace(' ', '_')}effective_stress"
+                    )
+                    if gmt:
+                        print("\t\t\t\tConverting to netCDF format. Command is:")
+                        cmd_tmp = (
+                            f"gmt xyz2grd {outdestination}/{layer.replace(' ', '_')}effective_stress "
+                            f"-G{outdestination}/{layer.replace(' ', '_')}effective_stress.nc "
+                            f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer])[0]:.5f} "
+                            f"-R{np.min(t_gwflow[layer]):.3f}/{np.max(t_gwflow[layer]):.3f}/"
+                            f"{np.min(Z[layer]):.2f}/{np.max(Z[layer]):.2f}"
+                            "-ZTLf"
+                        )
+                        print(cmd_tmp)
+                        subprocess.call(cmd_tmp, shell=True)
+                        os.remove(
+                            f"{outdestination}/{layer.replace(' ', '_')}effective_stress"
+                        )
+                else:
+                    with open(
+                        f"{outdestination}/{layer.replace(' ', '_')}effective_stress.csv",
+                        "w+",
+                    ) as myCsv:
+                        csvWriter = csv.writer(myCsv, delimiter=",")
+                        csvWriter.writerows(effective_stress[layer])
+
+        elif layer_types[layer] == "Aquifer":
+            head_series[layer] = dict([("Interconnected matrix", head_data[layer])])
+            inelastic_flag[layer] = {}
+            groundwater_solution_dates[layer] = {}
+            Z[layer] = {}
+            t_gwflow[layer] = {}
+            effective_stress[layer] = {}
+            initial_condition_precons[layer] = {}
+            print(f"\t\t{layer} is an aquifer.")
+            if interbeds_switch[layer]:
+                interbeds_tmp = interbeds_distributions[layer]
+                bed_thicknesses_tmp = list(interbeds_tmp.keys())
+                print(
+                    f"\t\t{layer} is an aquifer with interbedded clays. "
+                    f"Thicknesses of clays to be solved are {bed_thicknesses_tmp}"
+                )
+                for thickness in bed_thicknesses_tmp:
+                    print("")
+                    print(f"\t\tSolving for thickness {thickness:.2f}.")
+
+                    t_aquifer_tmp = mdates.date2num(head_data[layer].iloc[:, 0].to_numpy())
+                    h_aquifer_tmp = head_data[layer].iloc[:, 1].to_numpy()
+                    z_tmp = np.arange(
+                        0, thickness + 0.00001, dz_clays[layer]
+                    )  # 0.000001 to include the stop value.
+                    t_interp_new = 0.0001 * np.arange(
+                        10000 * min(t_aquifer_tmp),
+                        10000 * max(t_aquifer_tmp) + 1,
+                        10000 * dt_master[layer],
+                    )  # The ridiculous factor of 1/10000 is to ensure the np.arange function takes integer steps. Else, floating point precision issues mean that things go wrong for timesteps less than <0.1 seconds.
+                    h_aquifer_tmp_interpolated = np.array([
+                        t_interp_new, 
+                        np.interp(t_interp_new, t_aquifer_tmp, h_aquifer_tmp)
+                    ]).T
+
+
+                    if preconsolidation_head_type == "initial_plus_offset":
+                        print(
+                            "\t\tHead initial condition is initial_plus_offset, so a constant head "
+                            "initial condition will be applied."
+                        )
+                        initial_precons = False
+                        initial_condition_tmp = (
+                            h_aquifer_tmp[0] * np.ones_like(z_tmp)
+                            + preconsolidation_head_offset[layer]
+                        )
+                        initial_condition_precons[layer][
+                            f"{thickness:.2f} clays"
+                        ] = np.array([])
+                        print(
+                            f"\t\tinitial head value is {initial_condition_tmp[0]:.2f}"
+                        )
+
+                    else:
+                        initial_precons = False
+                        initial_condition_precons[layer][
+                            f"{thickness:.2f} clays"
+                        ] = np.array([])
+                        initial_condition_tmp = h_aquifer_tmp[0]
+
+                    if MODE == "resume":
+                        initial_precons = True
+                        print(f"\t\tMode is resume. Looking for initial condition in directory {resume_directory}/head_outputs.")
+                        
+                        if os.path.isfile(f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clay_head_data.nc"):
+                            print("Head found as .nc file. Reading.")
+                            Dat = Dataset(
+                                f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clay_head_data.nc",
+                                "r",
+                                format="CF-1.7",
+                            )
+                            time_bc_tmp = Dat.variables["time"][:]
+                            head_bc_tmp = Dat.variables["z"][:]
+                            idx_bc_tmp = np.argmin(np.abs(mdates.date2num(resume_date) - time_bc_tmp))
+                            if (np.min(np.abs(mdates.date2num(resume_date) - time_bc_tmp)) >= 1):
+                                print(
+                                    f"\tNote that you are are resuming with the initial head condition from {time_bc_tmp[idx_bc_tmp]}"
+                                    f", but the specified resume date was {resume_date}."
+                                )
+                        
+                        elif os.path.isfile(f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clay_head_data.csv"):
+                            print("Head found as .csv file. Reading.")
+                            head_bc_tmp = np.genfromtxt(
+                                f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clay_head_data.csv",
+                                delimiter=",",
+                            )
+                            time_bc_tmp1 = np.core.defchararray.rstrip(
+                                np.genfromtxt(
+                                    f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
+                                    dtype=str,
+                                    delimiter=",",
+                                )
+                            )
+                            if (time_bc_tmp1[0][-1] == "M"):  # This means it was done on Bletchley in xterm, so %c won't work as it whacks AM or PM on the end.
+                                time_bc_tmp = mdates.date2num(
+                                    [
+                                        datetime.datetime.strptime(
+                                            string, "%a %d %b %Y %I:%M:%S %p"
+                                        )
+                                        for string in time_bc_tmp1
+                                    ]
+                                )
+                            else:
+                                time_bc_tmp = mdates.date2num(
+                                    [
+                                        datetime.datetime.strptime(string, "%c")
+                                        for string in time_bc_tmp1
+                                    ]
+                                )
+                            idx_bc_tmp = np.argmin(np.abs(mdates.date2num(resume_date) - time_bc_tmp))
+                        
+                        else:
+                            print("\tUnable to find head file as .nc or .csv. Something has gone wrong; aborting.")
+                            sys.exit(1)
+
+                        print(f"\t\tNow looking for effective stress initial condition in directory {resume_directory}.")
+                        
+                        nc_file_path = f"{resume_directory}/{layer.replace(' ', '_')}_{thickness:.2f}clayeffective_stress.nc"
+                        csv_file_path = f"{resume_directory}/{layer.replace(' ', '_')}_{thickness:.1f}clayeffective_stress.csv"
+                        
+                        if os.path.isfile(nc_file_path):
+                            print("t_eff found as .nc file. Reading.")
+                            Dat = Dataset(nc_file_path, "r", format="CF-1.7")
+                            time_teff_tmp = Dat.variables["time"][:]
+                            teff_bc_tmp = Dat.variables["z"][:] / (rho_w * g)  # Get it into units of head
+                        elif os.path.isfile(csv_file_path):
+                            print("t_eff found as .csv file. Reading.")
+                            teff_bc_tmp = np.genfromtxt(csv_file_path, delimiter=",") / (rho_w * g)
+                            time_teff_tmp1 = np.core.defchararray.rstrip(
+                                np.genfromtxt(
+                                    f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
+                                    dtype=str,
+                                    delimiter=",",
+                                )
+                            )
+                            if time_teff_tmp1[0][-1] == "M":
+                                time_teff_tmp = mdates.date2num(
+                                    [datetime.datetime.strptime(string, "%a %d %b %Y %I:%M:%S %p") for string in time_teff_tmp1]
+                                )
+                            else:
+                                time_teff_tmp = mdates.date2num(
+                                    [datetime.datetime.strptime(string, "%c") for string in time_teff_tmp1]
+                                )
+                        else:
+                            print("\tUnable to find t_eff file as .nc or .csv. Something has gone wrong; aborting.")
+                            sys.exit(1)
+                        
+                        idx_teff_bc_tmp = np.argmin(np.abs(mdates.date2num(resume_date) - time_teff_tmp))
+                        if np.min(np.abs(mdates.date2num(resume_date) - time_teff_tmp)) >= 1:
+                            print(
+                                f"\tNote that you are resuming with the initial t_eff condition from {time_bc_tmp[idx_bc_tmp]}, but the specified resume date was {resume_date}."
+                            )
+
+
+                        initial_condition_tmp = head_bc_tmp[:, idx_bc_tmp]
+                        initial_condition_precons[layer][
+                            f"{thickness:.2f} clays"
+                        ] = np.max(teff_bc_tmp[:, : idx_teff_bc_tmp + 1], axis=1)
+
+                    if overburden_stress_gwflow:
+                        if layer != unconfined_aquifer_name:
+                            print("\t\t\tInterpolating overburden stress.")
+                        else:
+                            print("\t\t\tThis is the unconfined aquifer; overburden still being included.")
+                            
+                        if len(overburden_dates) != len(t_interp_new):
+                            f_tmp = scipy.interpolate.interp1d(
+                                mdates.date2num(overburden_dates.to_numpy()), overburden_data.iloc[:, 1].to_numpy()
+                            )
+                            overburden_data_tmp = f_tmp(t_interp_new)
+                            overburden_dates_tmp = t_interp_new
+                        else:
+                            overburden_data_tmp = overburden_data
+                    else:
+                        overburden_data_tmp = [0]
+
+                    t1_start = time.time()
+                    (
+                        hmat_tmp,
+                        inelastic_flag_tmp,
+                    ) = solve_head_equation_elasticinelastic(
+                        dt_master[layer],
+                        t_interp_new,
+                        dz_clays[layer],
+                        z_tmp,
+                        np.vstack(
+                            (
+                                h_aquifer_tmp_interpolated[:, 1],
+                                h_aquifer_tmp_interpolated[:, 1],
+                            )
+                        ),
+                        initial_condition_tmp,
+                        vertical_conductivity[layer] / clay_Sse[layer],
+                        vertical_conductivity[layer] / clay_Ssv[layer],
+                        overburdenstress=overburden_stress_gwflow,
+                        overburden_data=1
+                        / (rho_w * g)
+                        * np.array(overburden_data_tmp),
+                        initial_precons=initial_precons,
+                        initial_condition_precons=-initial_condition_precons[layer][
+                            f"{thickness:.2f} clays"
+                        ],
+                    )
+                    t1_stop = time.time()
+                    print("\t\t\tElapsed time in seconds:", t1_stop - t1_start)
+                    head_series[layer][f"{thickness:.2f} clays"] = hmat_tmp
+                    inelastic_flag[layer][
+                        f"{thickness:.2f} clays"
+                    ] = inelastic_flag_tmp
+                    t_gwflow[layer][f"{thickness:.2f} clays"] = t_interp_new
+                    Z[layer][f"{thickness:.2f} clays"] = z_tmp
+
+                    if save_output_head_timeseries:
+                        if np.size(inelastic_flag_tmp) >= 3e6:
+                            if gmt:
+                                print(
+                                    "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
+                                )
+                                inelastic_flag_tmp.astype(np.byte).tofile(
+                                    f"{outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW"
+                                )
+                                print(
+                                    "\t\t\t\tConverting to netCDF format. Command is:"
+                                )
+                                cmd_tmp = (
+                                    f"gmt xyz2grd {outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW "
+                                    f"-G{outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW.nb "
+                                    f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer][f'{thickness:.2f} clays'])[0]:.5f} "
+                                    f"-R{np.min(t_gwflow[layer][f'{thickness:.2f} clays']):.3f}/{np.max(t_gwflow[layer][f'{thickness:.2f} clays']):.3f}/"
+                                    f"{np.min(Z[layer][f'{thickness:.2f} clays']):.3f}/{np.max(Z[layer][f'{thickness:.2f} clays']):.3f} "
+                                    "-ZTLc"
+                                )
+
+                                print(cmd_tmp)
+                                subprocess.call(cmd_tmp, shell=True)
+                                os.remove(
+                                    f"{outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW"
+                                )
+
+                            else:
+                                print(
+                                    "\t\t\tInelastic flag gwflow has more than 3 million entries; saving as signed char."
+                                )
+                                inelastic_flag_tmp.astype(np.byte).tofile(
+                                    f"{outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW"
+                                )
+
+                        else:
+                            with open(
+                                f"{outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW.csv",
+                                "w+",
+                            ) as myCsv:
+                                csvWriter = csv.writer(myCsv, delimiter=",")
+                                csvWriter.writerows(inelastic_flag_tmp)
+
+                    groundwater_solution_dates[layer][
+                        f"{thickness:.2f} clays"
+                    ] = t_interp_new
+
+                    if overburden_stress_gwflow:
+                        effective_stress[layer][f"{thickness:.2f} clays"] = (
+                            np.tile(overburden_data_tmp, (np.shape(hmat_tmp)[0], 1))
+                            - rho_w * g * hmat_tmp
+                        )
+                    else:
+                        effective_stress[layer][f"{thickness:.2f} clays"] = (
+                            np.zeros_like(hmat_tmp) - rho_w * g * hmat_tmp
+                        )
+
+                    if save_effective_stress:
+                        print(
+                            "\t\tSaving effective stress and overburden stress outputs."
+                        )
+                        if (
+                            np.size(
+                                effective_stress[layer][f"{thickness:.2f} clays"]
+                            )
+                            >= 1e6
+                        ):
+                            print(
+                                "\t\t\tEffective stress has more than 1 million entries; saving as 32 bit floats."
+                            )
+                            effective_stress[layer][
+                                f"{thickness:.2f} clays"
+                            ].astype(np.single).tofile(
+                                f"{outdestination}/{layer.replace(' ', '_')}_{thickness}clayeffective_stress"
+                            )
+                            if gmt:
+                                print(
+                                    "\t\t\t\tConverting to netCDF format. Command is:"
+                                )
+                                cmd_tmp = (
+                                    f"gmt xyz2grd {outdestination}/{layer.replace(' ', '_')}_{thickness}clayeffective_stress "
+                                    f"-G{outdestination}/{layer.replace(' ', '_')}_{thickness}clayeffective_stress.nc "
+                                    f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer][f'{thickness} clays'])[0]:.5f} "
+                                    f"-R{np.min(t_gwflow[layer][f'{thickness} clays']):.3f}/{np.max(t_gwflow[layer][f'{thickness} clays']):.3f}/"
+                                    f"{np.min(Z[layer][f'{thickness} clays']):.2f}/{np.max(Z[layer][f'{thickness} clays']):.2f} "
+                                    "-ZTLf"
+                                )
+
+                                print(cmd_tmp)
+                                subprocess.call(cmd_tmp, shell=True)
+                                os.remove(f"{outdestination}/{layer.replace(' ', '_')}_{thickness}clayeffective_stress")
+                                
+                        else:
+                            with open(
+                                f"{outdestination}/{layer.replace(' ', '_')}_{thickness}clayeffective_stress.csv",
+                                "w+",
+                            ) as myCsv:
+                                csvWriter = csv.writer(myCsv, delimiter=",")
+                                csvWriter.writerows(
+                                    effective_stress[layer][
+                                        f"{thickness:.2f} clays"
+                                    ]
+                                )
+
+                        if overburden_stress_gwflow:
+                            if len(overburden_data_tmp) * len(z_tmp) >= 1e6:
+                                print(
+                                    "\t\t\tOverburden stress has more than 1 million entries; saving as 32 bit floats."
+                                )
+                                overburden_tmp_tosave = np.tile(
+                                    overburden_data_tmp, (len(z_tmp), 1)
+                                )
+                                overburden_tmp_tosave.astype(np.single).tofile(
+                                    f"{outdestination}/{layer.replace(' ', '_')}_{thickness}clay_overburden_stress"
+                                )
+                                if gmt:
+                                    print(
+                                        "\t\t\t\tConverting to netCDF format. Command is:"
+                                    )
+                                    cmd_tmp = (
+                                        f"gmt xyz2grd {outdestination}/{layer.replace(' ', '_')}_{thickness}clay_overburden_stress "
+                                        f"-G{outdestination}/{layer.replace(' ', '_')}_{thickness}clay_overburden_stress.nc "
+                                        f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer][f'{thickness:.2f} clays'])[0]:.5f} "
+                                        f"-R{np.min(t_gwflow[layer][f'{thickness:.2f} clays']):.3f}/{np.max(t_gwflow[layer][f'{thickness:.2f} clays']):.3f}/"
+                                        f"{np.min(Z[layer][f'{thickness:.2f} clays']):.3f}/{np.max(Z[layer][f'{thickness:.2f} clays']):.3f} "
+                                        "-ZTLf"
+                                    )
+
+                                    print(cmd_tmp)
+                                    subprocess.call(cmd_tmp, shell=True)
+                                    os.remove(f"{outdestination}/{layer.replace(' ', '_')}_{thickness}clay_overburden_stress")
+                            
+                            else:
+                                with open(f"{outdestination}/{layer.replace(' ', '_')}_{thickness}clay_overburden_stress.csv", "w+") as myCsv:
+                                    csvWriter = csv.writer(myCsv, delimiter=",")
+                                    csvWriter.writerows(
+                                        np.tile(
+                                            overburden_data_tmp, (len(z_tmp), 1)
+                                        )
+                                    )
+
+            else:
+                print(
+                    f"\t{aquifer} is an aquifer with no interbedded clays. No solution required."
+                )
+
+else:
+    print(
+        "No layers require head time series solutions; skipping solving for head time series in clay layers."
+    )
+
+solving_head_stop = time.time()
+solving_head_time = solving_head_stop - solving_head_start
+
+# %% New section, saving head outputs.
 # print()
 # print()
 # print("".center(80, "*"))
@@ -1700,7 +1503,7 @@ if len(layers_requiring_solving) >= 0:
 #        if layer_types[layer] == "Aquifer":
 #            dates_str = [
 #                x.strftime("%d-%b-%Y")
-#                for x in matplotlib.dates.num2date(head_data[layer][:, 0])
+#                for x in mdates.num2date(head_data[layer][:, 0])
 #            ]
 #            np.savetxt(
 #                "%s/head_outputs/%s_head_data.csv"
@@ -1711,12 +1514,12 @@ if len(layers_requiring_solving) >= 0:
 #            if interbeds_switch[layer]:
 #                interbeds_tmp = interbeds_distributions[layer]
 #                for thickness in list(interbeds_tmp.keys()):
-#                    if np.size(head_series[layer]["%.2f clays" % thickness]) >= 1e6:
+#                    if np.size(head_series[layer][f"{thickness:.2f} clays"]) >= 1e6:
 #                        if gmt:
 #                            print(
 #                                "\t\t\tHead has more than 1 million entries; saving as 32 bit floats."
 #                            )
-#                            head_series[layer]["%.2f clays" % thickness].astype(
+#                            head_series[layer][f"{thickness:.2f} clays"].astype(
 #                                np.single
 #                            ).tofile(
 #                                "%s/head_outputs/%s_%sclay_head_data"
@@ -1731,13 +1534,13 @@ if len(layers_requiring_solving) >= 0:
 #                                    thickness,
 #                                    outdestination,
 #                                    layer.replace(" ", "_"),
-#                                    "%.2f" % thickness,
+#                                    f"{thickness:.2f}",
 #                                    dt_master[layer],
-#                                    np.diff(Z[layer]["%.2f clays" % thickness])[0],
-#                                    np.min(t_gwflow[layer]["%.2f clays" % thickness]),
-#                                    np.max(t_gwflow[layer]["%.2f clays" % thickness]),
-#                                    np.min(Z[layer]["%.2f clays" % thickness]),
-#                                    np.max(Z[layer]["%.2f clays" % thickness]),
+#                                    np.diff(Z[layer][f"{thickness:.2f} clays"])[0],
+#                                    np.min(t_gwflow[layer][f"{thickness:.2f} clays"]),
+#                                    np.max(t_gwflow[layer][f"{thickness:.2f} clays"]),
+#                                    np.min(Z[layer][f"{thickness:.2f} clays"]),
+#                                    np.max(Z[layer][f"{thickness:.2f} clays"]),
 #                                )
 #                            )
 #
@@ -1751,7 +1554,7 @@ if len(layers_requiring_solving) >= 0:
 #                            print(
 #                                "\t\t\tHead has more than 1 million entries; saving as 16 bit floats."
 #                            )
-#                            head_series[layer]["%.2f clays" % thickness].astype(
+#                            head_series[layer][f"{thickness:.2f} clays"].astype(
 #                                np.half
 #                            ).tofile(
 #                                "%s/head_outputs/%s_%sclay_head_data"
@@ -1764,13 +1567,13 @@ if len(layers_requiring_solving) >= 0:
 #                            % (
 #                                outdestination,
 #                                layer.replace(" ", "_"),
-#                                "%.2f" % thickness,
+#                                f"{thickness:.2f}",
 #                            ),
 #                            "w+",
 #                        ) as myCsv:
 #                            csvWriter = csv.writer(myCsv, delimiter=",")
 #                            csvWriter.writerows(
-#                                head_series[layer]["%.2f clays" % thickness]
+#                                head_series[layer][f"{thickness:.2f} clays"]
 #                            )
 #            with open(
 #                "%s/head_outputs/%s_groundwater_solution_dates.csv"
@@ -1782,7 +1585,7 @@ if len(layers_requiring_solving) >= 0:
 #                wr.writerow(
 #                    [
 #                        x.strftime("%c")
-#                        for x in matplotlib.dates.num2date(
+#                        for x in mdates.num2date(
 #                            groundwater_solution_dates[layer][res]
 #                        )
 #                    ]
@@ -1847,7 +1650,7 @@ if len(layers_requiring_solving) >= 0:
 #                wr.writerow(
 #                    [
 #                        x.strftime("%c")
-#                        for x in matplotlib.dates.num2date(
+#                        for x in mdates.num2date(
 #                            groundwater_solution_dates[layer]
 #                        )
 #                    ]
@@ -1865,7 +1668,7 @@ if len(layers_requiring_solving) >= 0:
 #            inelastic_flag_vid = inelastic_flag_vid == 1
 #            dates_str = [
 #                x.strftime("%d-%b-%Y")
-#                for x in matplotlib.dates.num2date(groundwater_solution_dates[layer])
+#                for x in mdates.num2date(groundwater_solution_dates[layer])
 #            ]
 #            create_head_video_elasticinelastic(
 #                hmat_tmp,
@@ -1886,18 +1689,18 @@ if len(layers_requiring_solving) >= 0:
 #            )
 #            for thickness in bed_thicknesses_tmp:
 #                print("\t\tCreating video for %s_%.2f clays" % (layer, thickness))
-#                hmat_tmp = head_series[layer]["%.2f clays" % thickness]
-#                inelastic_flag_vid = inelastic_flag[layer]["%.2f clays" % thickness]
+#                hmat_tmp = head_series[layer][f"{thickness:.2f} clays"]
+#                inelastic_flag_vid = inelastic_flag[layer][f"{thickness:.2f} clays"]
 #                inelastic_flag_vid = inelastic_flag_vid == 1
 #                dates_str = [
 #                    x.strftime("%d-%b-%Y")
-#                    for x in matplotlib.dates.num2date(
-#                        groundwater_solution_dates[layer]["%.2f clays" % thickness]
+#                    for x in mdates.num2date(
+#                        groundwater_solution_dates[layer][f"{thickness:.2f} clays"]
 #                    )
 #                ]
 #                create_head_video_elasticinelastic(
 #                    hmat_tmp,
-#                    Z[layer]["%.2f clays" % thickness],
+#                    Z[layer][f"{thickness:.2f} clays"],
 #                    inelastic_flag_vid,
 #                    dates_str,
 #                    outdestination + "/figures",
@@ -1987,7 +1790,7 @@ if len(layers_requiring_solving) >= 0:
 #                if overburden_stress_compaction:
 #                    unconfined_tmp = unconfined_aquifer_name == layer
 #                    if len(overburden_dates) != len(
-#                        groundwater_solution_dates[layer]["%.2f clays" % thickness]
+#                        groundwater_solution_dates[layer][f"{thickness:.2f} clays"]
 #                    ):
 #                        print(
 #                            "\t\t\tOverburden series is %i long whereas head series is %i long. Interpolating overburden stress."
@@ -1995,7 +1798,7 @@ if len(layers_requiring_solving) >= 0:
 #                                len(overburden_dates),
 #                                len(
 #                                    groundwater_solution_dates[layer][
-#                                        "%.2f clays" % thickness
+#                                        f"{thickness:.2f} clays"
 #                                    ]
 #                                ),
 #                            )
@@ -2004,10 +1807,10 @@ if len(layers_requiring_solving) >= 0:
 #                            overburden_dates, overburden_data
 #                        )
 #                        overburden_data_tmp = f_tmp(
-#                            groundwater_solution_dates[layer]["%.2f clays" % thickness]
+#                            groundwater_solution_dates[layer][f"{thickness:.2f} clays"]
 #                        )
 #                        overburden_dates_tmp = groundwater_solution_dates[layer][
-#                            "%.2f clays" % thickness
+#                            f"{thickness:.2f} clays"
 #                        ]
 #                    else:
 #                        overburden_data_tmp = overburden_data
@@ -2018,7 +1821,7 @@ if len(layers_requiring_solving) >= 0:
 #                            "elastic_%.2f clays" % thickness
 #                        ],
 #                    ) = subsidence_solver_aquitard_elasticinelastic(
-#                        head_series[layer]["%.2f clays" % thickness],
+#                        head_series[layer][f"{thickness:.2f} clays"],
 #                        (clay_Sse[layer] - compressibility_of_water),
 #                        (clay_Ssv[layer] - compressibility_of_water),
 #                        dz_clays[layer],
@@ -2028,7 +1831,7 @@ if len(layers_requiring_solving) >= 0:
 #                        endnodes=compaction_solver_debug_include_endnodes,
 #                        preset_precons=preset_precons,
 #                        ic_precons=initial_condition_precons[layer][
-#                            "%.2f clays" % thickness
+#                            f"{thickness:.2f} clays"
 #                        ],
 #                    )
 #                else:
@@ -2038,14 +1841,14 @@ if len(layers_requiring_solving) >= 0:
 #                            "elastic_%.2f clays" % thickness
 #                        ],
 #                    ) = subsidence_solver_aquitard_elasticinelastic(
-#                        head_series[layer]["%.2f clays" % thickness],
+#                        head_series[layer][f"{thickness:.2f} clays"],
 #                        (clay_Sse[layer] - compressibility_of_water),
 #                        (clay_Ssv[layer] - compressibility_of_water),
 #                        dz_clays[layer],
 #                        endnodes=compaction_solver_debug_include_endnodes,
 #                        preset_precons=preset_precons,
 #                        ic_precons=initial_condition_precons[layer][
-#                            "%.2f clays" % thickness
+#                            f"{thickness:.2f} clays"
 #                        ],
 #                    )
 #                deformation[layer]["total_%.2f clays" % thickness] = (
@@ -2080,7 +1883,7 @@ if len(layers_requiring_solving) >= 0:
 #
 #            deformation_OUTPUT_tmp = {}
 #            deformation_OUTPUT_tmp["dates"] = [
-#                x.strftime("%d-%b-%Y") for x in matplotlib.dates.num2date(t_total_tmp)
+#                x.strftime("%d-%b-%Y") for x in mdates.num2date(t_total_tmp)
 #            ]
 #
 #            deformation_OUTPUT_tmp["Interconnected Matrix"] = np.array(
@@ -2207,7 +2010,7 @@ if len(layers_requiring_solving) >= 0:
 #                    ["pre" in key for key in list(layer_thicknesses[layer].keys())]
 #                )[0][0]
 #            ]
-#            datetimedates = matplotlib.dates.num2date(deformation[layer]["total"][0, :])
+#            datetimedates = mdates.num2date(deformation[layer]["total"][0, :])
 #            #        datetimedates = [dt.strptime(d,'%d-%b-%Y') for d in deformation_OUTPUT[layer]['dates'].values]
 #            logicaltmp = [
 #                datetimedate
@@ -2340,7 +2143,7 @@ if len(layers_requiring_solving) >= 0:
 #                bbox_inches="tight",
 #            )
 #            plt.xlim(
-#                matplotlib.dates.date2num(
+#                mdates.date2num(
 #                    [datetime.date(2015, 1, 1), datetime.date(2020, 1, 1)]
 #                )
 #            )
@@ -2437,15 +2240,15 @@ if len(layers_requiring_solving) >= 0:
 #                                thickness,
 #                                outdestination,
 #                                layer.replace(" ", "_"),
-#                                "%.2f" % thickness,
+#                                f"{thickness:.2f}",
 #                                dt_master[layer],
-#                                np.diff(Z[layer]["%.2f clays" % thickness])[0],
-#                                np.min(t_gwflow[layer]["%.2f clays" % thickness]),
-#                                np.max(t_gwflow[layer]["%.2f clays" % thickness]),
-#                                np.min(Z[layer]["%.2f clays" % thickness])
-#                                + np.diff(Z[layer]["%.2f clays" % thickness])[0] / 2,
-#                                np.max(Z[layer]["%.2f clays" % thickness])
-#                                - np.diff(Z[layer]["%.2f clays" % thickness])[0] / 2,
+#                                np.diff(Z[layer][f"{thickness:.2f} clays"])[0],
+#                                np.min(t_gwflow[layer][f"{thickness:.2f} clays"]),
+#                                np.max(t_gwflow[layer][f"{thickness:.2f} clays"]),
+#                                np.min(Z[layer][f"{thickness:.2f} clays"])
+#                                + np.diff(Z[layer][f"{thickness:.2f} clays"])[0] / 2,
+#                                np.max(Z[layer][f"{thickness:.2f} clays"])
+#                                - np.diff(Z[layer][f"{thickness:.2f} clays"])[0] / 2,
 #                            )
 #                        )
 #
@@ -2861,7 +2664,7 @@ if len(layers_requiring_solving) >= 0:
 ## t_total_tmp = 0.0001*np.arange(10000*np.min(deformation[maxdtlayer]['total'][0,:]),10000*(np.max(deformation[maxdtlayer]['total'][0,:]+0.001)),10000*maxdt) <<I think this line is wrong again. Removing and seeing if it works
 # print(t_total_tmp)
 # deformation_OUTPUT["dates"] = [
-#    x.strftime("%d-%b-%Y") for x in matplotlib.dates.num2date(t_total_tmp)
+#    x.strftime("%d-%b-%Y") for x in mdates.num2date(t_total_tmp)
 # ]
 # t_overall = np.zeros_like(t_total_tmp, dtype=float)
 # l_aqt = []
@@ -2919,15 +2722,15 @@ if len(layers_requiring_solving) >= 0:
 # )
 ## Rezero on jan 2015
 # plt.xlim(
-#    matplotlib.dates.date2num([datetime.date(2015, 1, 1), datetime.date(2020, 1, 1)])
+#    mdates.date2num([datetime.date(2015, 1, 1), datetime.date(2020, 1, 1)])
 # )
-# if np.min(l_tmp.get_xdata()) <= matplotlib.dates.date2num(datetime.date(2015, 1, 1)):
+# if np.min(l_tmp.get_xdata()) <= mdates.date2num(datetime.date(2015, 1, 1)):
 #    for line in l_aqt:
 #        line.set_ydata(
 #            np.array(line.get_ydata())
 #            - np.array(line.get_ydata())[
 #                np.array(line.get_xdata())
-#                == matplotlib.dates.date2num(datetime.date(2015, 1, 1))
+#                == mdates.date2num(datetime.date(2015, 1, 1))
 #            ]
 #        )
 #
