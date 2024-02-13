@@ -850,7 +850,7 @@ if len(layers_requiring_solving) >= 0:
                 elif os.path.isfile(csv_file_path):
                     print("Head found as .csv file. Reading.")
                     head_bc_tmp = np.genfromtxt(csv_file_path, delimiter=",")
-                    time_bc_tmp1 = np.core.defchararray.rstrip(
+                    time_bc_tmp1 = np.char.rstrip(
                         np.genfromtxt(
                             f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
                             dtype=str,
@@ -905,7 +905,7 @@ if len(layers_requiring_solving) >= 0:
                         delimiter=",",
                     )
                     teff_bc_tmp = teff_bc_tmp / (rho_w * g)
-                    time_teff_tmp1 = np.core.defchararray.rstrip(
+                    time_teff_tmp1 = np.char.rstrip(
                         np.genfromtxt(
                             f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
                             dtype=str,
@@ -1205,7 +1205,7 @@ if len(layers_requiring_solving) >= 0:
                                 f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clay_head_data.csv",
                                 delimiter=",",
                             )
-                            time_bc_tmp1 = np.core.defchararray.rstrip(
+                            time_bc_tmp1 = np.char.rstrip(
                                 np.genfromtxt(
                                     f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
                                     dtype=str,
@@ -1247,7 +1247,7 @@ if len(layers_requiring_solving) >= 0:
                         elif os.path.isfile(csv_file_path):
                             print("t_eff found as .csv file. Reading.")
                             teff_bc_tmp = np.genfromtxt(csv_file_path, delimiter=",") / (rho_w * g)
-                            time_teff_tmp1 = np.core.defchararray.rstrip(
+                            time_teff_tmp1 = np.char.rstrip(
                                 np.genfromtxt(
                                     f"{resume_directory}/head_outputs/{layer.replace(' ', '_')}_groundwater_solution_dates.csv",
                                     dtype=str,
@@ -1392,18 +1392,11 @@ if len(layers_requiring_solving) >= 0:
                         print(
                             "\t\tSaving effective stress and overburden stress outputs."
                         )
-                        if (
-                            np.size(
-                                effective_stress[layer][f"{thickness:.2f} clays"]
-                            )
-                            >= 1e6
-                        ):
+                        if (np.size(effective_stress[layer][f"{thickness:.2f} clays"]) >= 1e6):
                             print(
                                 "\t\t\tEffective stress has more than 1 million entries; saving as 32 bit floats."
                             )
-                            effective_stress[layer][
-                                f"{thickness:.2f} clays"
-                            ].astype(np.single).tofile(
+                            effective_stress[layer][f"{thickness:.2f} clays"].astype(np.single).tofile(
                                 f"{outdestination}/{layer.replace(' ', '_')}_{thickness}clayeffective_stress"
                             )
                             if gmt:
