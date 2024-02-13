@@ -1000,7 +1000,7 @@ if len(layers_requiring_solving) >= 0:
                         print("\t\t\t\tConverting to netCDF format. Command is:")
                         cmd_tmp = (
                             f"gmt xyz2grd {outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW "
-                            f"-G{outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW.nb "
+                            f"-G{outdestination}/head_outputs/{layer.replace(' ', '_')}inelastic_flag_GWFLOW.nc "
                             f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer])[0]:.5f} "
                             f"-R{np.min(t_gwflow[layer]):.3f}/{np.max(t_gwflow[layer]):.3f}/"
                             f"{np.min(Z[layer]):.3f}/{np.max(Z[layer]):.3f}"
@@ -1344,7 +1344,7 @@ if len(layers_requiring_solving) >= 0:
                                 )
                                 cmd_tmp = (
                                     f"gmt xyz2grd {outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW "
-                                    f"-G{outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW.nb "
+                                    f"-G{outdestination}/head_outputs/{layer.replace(' ', '_')}_{thickness:.2f}clayinelastic_flag_GWFLOW.nc "
                                     f"-I{dt_master[layer]:.3f}/{np.diff(Z[layer][f'{thickness:.2f} clays'])[0]:.5f} "
                                     f"-R{np.min(t_gwflow[layer][f'{thickness:.2f} clays']):.3f}/{np.max(t_gwflow[layer][f'{thickness:.2f} clays']):.3f}/"
                                     f"{np.min(Z[layer][f'{thickness:.2f} clays']):.3f}/{np.max(Z[layer][f'{thickness:.2f} clays']):.3f} "
@@ -2225,7 +2225,7 @@ solving_head_time = solving_head_stop - solving_head_start
 #                        )
 #                        print("\t\t\t\tConverting to netCDF format. Command is:")
 #                        cmd_tmp = (
-#                            "gmt xyz2grd %s/s_outputs/%s_%sclayinelastic_flag_COMPACTION -G%s/s_outputs/%s_%sclayinelastic_flag_COMPACTION.nb -I%.3f/%.5f -R%.3ft/%.3ft/%.3f/%.3f -ZTLc"
+#                            "gmt xyz2grd %s/s_outputs/%s_%sclayinelastic_flag_COMPACTION -G%s/s_outputs/%s_%sclayinelastic_flag_COMPACTION.nc -I%.3f/%.5f -R%.3ft/%.3ft/%.3f/%.3f -ZTLc"
 #                            % (
 #                                outdestination,
 #                                layer.replace(" ", "_"),
