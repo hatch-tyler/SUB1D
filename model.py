@@ -739,8 +739,8 @@ if len(layers_requiring_solving) >= 0:
                 t_interp_new = 0.0001 * np.arange(
                     10000 * min(t_top), 10000 * max(t_top) + 1, 10000 * dt_master[layer]
                 )
-                f_tmp = scipy.interpolate.interp1d(t_top, head_data[top_boundary][:, 1])
-                top_head_tmp = np.array([t_interp_new, f_tmp(t_interp_new)]).T
+                h_interp_new = np.interp(t_interp_new, t_top, head_data[top_boundary].iloc[:, 1].to_numpy())
+                top_head_tmp = np.array([t_interp_new, h_interp_new]).T
                 spacing_top = 1
 
             t_bot = head_data[bot_boundary][:, 0]
@@ -765,8 +765,8 @@ if len(layers_requiring_solving) >= 0:
                 t_interp_new = 0.0001 * np.arange(
                     10000 * min(t_bot), 10000 * max(t_bot) + 1, 10000 * dt_master[layer]
                 )
-                f_tmp = scipy.interpolate.interp1d(t_top, head_data[bot_boundary][:, 1])
-                bot_head_tmp = np.array([t_interp_new, f_tmp(t_interp_new)]).T
+                h_interp_new = np.interp(t_interp_new, t_top, head_data[bot_boundary].iloc[:, 1].to_numpy())
+                bot_head_tmp = np.array([t_interp_new, h_interp_new]).T
                 spacing_bot = 1
 
             if not all(t_top == t_bot):
@@ -797,10 +797,7 @@ if len(layers_requiring_solving) >= 0:
                     print("\t\tPreparing overburden stress.")
                     if len(overburden_dates) != len(t_in):
                         print("\t\t\tInterpolating overburden stress.")
-                        f_tmp = scipy.interpolate.interp1d(
-                            overburden_dates, overburden_data
-                        )
-                        overburden_data_tmp = f_tmp(t_in)
+                        overburden_data_tmp = np.interp(t_in, overburden_dates, overburden_data)
                         overburden_dates_tmp = t_in
                     else:
                         overburden_data_tmp = overburden_data
@@ -1285,10 +1282,12 @@ if len(layers_requiring_solving) >= 0:
                             print("\t\t\tThis is the unconfined aquifer; overburden still being included.")
                             
                         if len(overburden_dates) != len(t_interp_new):
-                            f_tmp = scipy.interpolate.interp1d(
-                                mdates.date2num(overburden_dates.to_numpy()), overburden_data.iloc[:, 1].to_numpy()
+                            overburden_data_tmp = np.interp(
+                                t_interp_new,
+                                mdates.date2num(overburden_dates.to_numpy()),
+                                overburden_data.iloc[:, 1].to_numpy()
                             )
-                            overburden_data_tmp = f_tmp(t_interp_new)
+
                             overburden_dates_tmp = t_interp_new
                         else:
                             overburden_data_tmp = overburden_data
