@@ -1,0 +1,107 @@
+# SUB1D Configuration: Unconfined Aquifer (Lindsay, 5 clay layers)
+# Converted from EXAMPLE UNCONFINED Lindsay_5c_Test_paramfile.par
+
+admin:
+  run_name: Lindsay_5c_test
+  output_folder: Output/
+  overwrite: false
+
+mode: Normal
+
+layers:
+  - name: Upper Aquifer
+    type: Aquifer
+    thickness_type: constant
+    thickness: 140
+    compaction_switch: true
+    interbeds_switch: true
+    interbeds_distributions:
+      1: 1
+
+  - name: Corcoran Clay
+    type: Aquitard
+    thickness_type: constant
+    thickness: 1
+    compaction_switch: true
+
+  - name: Lower Aquifer1
+    type: Aquifer
+    thickness_type: step_changes
+    thickness:
+      pre-2022: 1
+      2022-: 2
+    compaction_switch: true
+    interbeds_switch: true
+    interbeds_distributions:
+      21: 1
+
+initial_stress:
+  type:
+    Upper Aquifer: initial_equilibrium
+    Corcoran Clay: initial_equilibrium
+    Lower Aquifer1: initial_equilibrium
+  offset:
+    Upper Aquifer: 0
+    Lower Aquifer1: 0
+  offset_unit: head
+
+head_data_files:
+  Upper Aquifer: Lindsay_1905-2070_MT_2022_GSP.csv
+  Lower Aquifer1: no_gwl_change.csv
+
+solver:
+  dt_master:
+    Upper Aquifer: 0.5
+    Corcoran Clay: 0.5
+    Lower Aquifer1: 0.5
+  dz_clays:
+    Upper Aquifer: 0.2
+    Corcoran Clay: 0.5
+    Lower Aquifer1: 0.2
+  groundwater_flow_solver_type:
+    Upper Aquifer: elastic-inelastic
+    Corcoran Clay: elastic-inelastic
+    Lower Aquifer1: elastic-inelastic
+  vertical_conductivity:
+    Upper Aquifer: 2.5e-7
+    Corcoran Clay: 2.5e-7
+    Lower Aquifer1: 2.5e-7
+
+overburden:
+  stress_gwflow: true
+  stress_compaction: true
+
+hydrology:
+  clay_Sse:
+    Upper Aquifer: 1.0e-4
+    Corcoran Clay: 1.0e-4
+    Lower Aquifer1: 1.0e-4
+  clay_Ssv:
+    Upper Aquifer: 1.6e-3
+    Corcoran Clay: 1.6e-3
+    Lower Aquifer1: 1.6e-3
+  sand_Sse:
+    Upper Aquifer: 2.0e-5
+    Lower Aquifer1: 2.0e-5
+  compressibility_of_water: 1.5e-6
+  rho_w: 1000
+  g: 9.81
+  specific_yield: 0.2
+
+compaction:
+  solver_compressibility_type:
+    Corcoran Clay: elastic-inelastic
+  debug_include_endnodes: false
+  preconsolidation_head_type: initial
+
+output:
+  save_effective_stress: false
+  save_internal_compaction: false
+  save_output_head_timeseries: false
+  save_s: false
+  create_output_head_video:
+    Upper Aquifer: false
+    Corcoran Clay: false
+    Lower Aquifer1: false
+
+time_unit: days

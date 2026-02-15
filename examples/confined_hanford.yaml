@@ -1,0 +1,115 @@
+# SUB1D Configuration: Confined Aquifer (South Hanford, 68 clay layers)
+# Converted from EXAMPLE CONFINED S_Hanford_68c_paramfile.par
+
+admin:
+  run_name: S_Hanford_68c
+  output_folder: Output/
+  overwrite: false
+
+mode: Normal
+
+layers:
+  - name: Upper Aquifer
+    type: Aquifer
+    thickness_type: constant
+    thickness: 50
+    compaction_switch: true
+    interbeds_switch: true
+    interbeds_distributions:
+      3: 3
+      5: 1
+      9: 1
+      15: 1
+
+  - name: Corcoran Clay
+    type: Aquitard
+    thickness_type: constant
+    thickness: 27
+    compaction_switch: true
+
+  - name: Lower Aquifer1
+    type: Aquifer
+    thickness_type: step_changes
+    thickness:
+      pre-1977: 121
+      1977-1984: 148
+      1984-1994: 319
+      1994-2015: 340
+      2015-: 350
+    compaction_switch: true
+    interbeds_switch: true
+    interbeds_distributions:
+      5: 5
+      10: 3
+      15: 2
+
+initial_stress:
+  type:
+    Upper Aquifer: initial_equilibrium
+    Corcoran Clay: initial_equilibrium
+    Lower Aquifer1: initial_equilibrium
+  offset:
+    Upper Aquifer: 0
+    Lower Aquifer1: 0
+  offset_unit: head
+
+head_data_files:
+  Upper Aquifer: UAS_1905-2070_MT_2022_GSP.csv
+  Lower Aquifer1: LAS_1905-2070_MT_2022_GSP.csv
+
+solver:
+  dt_master:
+    Upper Aquifer: 0.5
+    Corcoran Clay: 1.0
+    Lower Aquifer1: 0.5
+  dz_clays:
+    Upper Aquifer: 0.2
+    Corcoran Clay: 0.5
+    Lower Aquifer1: 0.2
+  groundwater_flow_solver_type:
+    Upper Aquifer: elastic-inelastic
+    Corcoran Clay: elastic-inelastic
+    Lower Aquifer1: elastic-inelastic
+  vertical_conductivity:
+    Upper Aquifer: 1.0e-6
+    Corcoran Clay: 1.0e-6
+    Lower Aquifer1: 1.0e-6
+
+overburden:
+  stress_gwflow: true
+  stress_compaction: true
+
+hydrology:
+  clay_Sse:
+    Upper Aquifer: 1.2e-4
+    Corcoran Clay: 1.2e-4
+    Lower Aquifer1: 1.2e-4
+  clay_Ssv:
+    Upper Aquifer: 1.0e-3
+    Corcoran Clay: 1.0e-3
+    Lower Aquifer1: 1.0e-3
+  sand_Sse:
+    Upper Aquifer: 3.3e-5
+    Lower Aquifer1: 3.3e-5
+  compressibility_of_water: 1.5e-6
+  rho_w: 1000
+  g: 9.81
+  specific_yield: 0.2
+
+compaction:
+  solver_compressibility_type:
+    Corcoran Clay: elastic-inelastic
+  debug_include_endnodes: false
+  preconsolidation_head_type: initial
+
+output:
+  save_effective_stress: false
+  save_internal_compaction: false
+  save_output_head_timeseries: false
+  save_s: false
+  create_output_head_video:
+    Upper Aquifer: false
+    Corcoran Clay: false
+    Lower Aquifer1: false
+
+time_unit: days

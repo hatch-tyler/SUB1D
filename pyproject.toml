@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "sub1d"
+version = "2.0.0"
+description = "1D Land Subsidence / Compaction Model"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.22",
+    "scipy>=1.8",
+    "pandas>=1.4",
+    "matplotlib>=3.5",
+]
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6.0"]
+netcdf = ["netCDF4>=1.6"]
+seaborn = ["seaborn>=0.12"]
+numba = ["numba>=0.56"]
+all = ["pyyaml>=6.0", "netCDF4>=1.6", "seaborn>=0.12", "numba>=0.56"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pyyaml>=6.0",
+    "netCDF4>=1.6",
+    "seaborn>=0.12",
+]
+
+[project.scripts]
+sub1d = "sub1d.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sub1d*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
