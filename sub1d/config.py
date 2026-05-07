@@ -155,6 +155,7 @@ class OutputConfig:
     save_internal_compaction: bool = False
     create_output_head_video: Union[dict, bool] = False
     save_s: bool = False
+    save_critical_head: bool = False
 
 
 @dataclass
@@ -207,24 +208,6 @@ class ModelConfig:
     def no_aquitards(self) -> int:
         return sum(1 for v in self.layer_types.values() if v == "Aquitard")
 
-    @property
-    def aquitards(self) -> list[str]:
-        return [n for n, t in self.layer_types.items() if t == "Aquitard"]
-
-    @property
-    def interbedded_layers(self) -> list[str]:
-        return [
-            lyr.name for lyr in self.layers
-            if lyr.layer_type == "Aquifer" and lyr.interbeds_switch
-        ]
-
-    @property
-    def layers_requiring_solving(self) -> list[str]:
-        return self.interbedded_layers + self.aquitards
-
-    @property
-    def no_layers_containing_clay(self) -> int:
-        return len(self.layers_requiring_solving)
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +360,15 @@ def _cfl_precheck(config: ModelConfig) -> None:
     CFL ~ K * dt / (Ss * dz^2).  A value >> 1 may cause numerical
     instability with explicit solvers.
     """
-    for name in config.layers_requiring_solving:
+    # Build layers_requiring_solving inline (interbedded aquifers + aquitards)
+    interbedded = [
+        lyr.name for lyr in config.layers
+        if lyr.layer_type == "Aquifer" and lyr.interbeds_switch
+    ]
+    aquitards = [n for n, t in config.layer_types.items() if t == "Aquitard"]
+    layers_requiring_solving = interbedded + aquitards
+
+    for name in layers_requiring_solving:
         dt = config.solver.dt_master.get(name)
         dz = config.solver.dz_clays.get(name)
         kv = config.solver.vertical_conductivity.get(name)
@@ -527,6 +518,9 @@ def load_yaml_config(path: str | Path) -> ModelConfig:
             ),
             create_output_head_video=ou.get("create_output_head_video", False),
             save_s=_str_to_bool(ou.get("save_s", False)),
+            save_critical_head=_str_to_bool(
+                ou.get("save_critical_head", False)
+            ),
         )
 
         # --- top-level extras -----------------------------------------------
@@ -1184,6 +1178,12 @@ def load_par_file(path: str | Path) -> ModelConfig:
         "save_s",
         False,
     )
+    save_critical_head = _parse_simple(
+        _read_par_value("save_critical_head", lines, required=False),
+        bool,
+        "save_critical_head",
+        False,
+    )
 
     create_output_head_video_raw = _read_par_value(
         "create_output_head_video", lines, required=False
@@ -1198,6 +1198,7 @@ def load_par_file(path: str | Path) -> ModelConfig:
         save_internal_compaction=save_internal_compaction,
         create_output_head_video=create_output_head_video,
         save_s=save_s,
+        save_critical_head=save_critical_head,
     )
 
     # ---- Remaining top-level parameters ------------------------------------

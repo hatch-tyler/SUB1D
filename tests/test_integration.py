@@ -94,7 +94,7 @@ class TestFullPipelineSynthetic:
         # Now solve compaction
         Sske = 1e-4
         Sskv = 1e-3
-        b, ifl = solve_compaction_elastic_inelastic(hmat, Sske, Sskv, dx)
+        b, ifl, _ = solve_compaction_elastic_inelastic(hmat, Sske, Sskv, dx)
 
         # With declining head, should see compaction (negative b means subsidence)
         assert b.shape == (n_steps,)

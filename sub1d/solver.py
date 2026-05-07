@@ -280,7 +280,7 @@ def solve_head_equation_elastic_inelastic(
     dx: float,
     x: np.ndarray,
     bc: np.ndarray,
-    ic: float,
+    ic: float | np.ndarray,
     k_elastic: float,
     k_inelastic: float,
     overburden_stress: bool = False,
@@ -304,8 +304,11 @@ def solve_head_equation_elastic_inelastic(
         1-D array of spatial node positions, shape ``(n_x,)``.
     bc : np.ndarray
         Boundary conditions, shape ``(2, n_t)``.
-    ic : float
-        Scalar initial condition applied uniformly across all nodes.
+    ic : float or np.ndarray
+        Initial condition.  Either a scalar applied uniformly across
+        all nodes, or a 1-D array of shape ``(n_x,)`` giving per-node
+        initial heads (e.g. a linear equilibrium profile between two
+        boundary aquifer heads for an aquitard).
     k_elastic : float
         Elastic diffusivity.
     k_inelastic : float
@@ -373,18 +376,27 @@ def solve_head_equation_elastic_inelastic(
             "Reduce dt or increase dx."
         )
 
+    # Normalise ic to a per-node array
+    ic_arr = np.asarray(ic, dtype=float)
+    if ic_arr.ndim == 0:
+        ic_arr = np.full(n_x, float(ic_arr))
+    elif ic_arr.shape != (n_x,):
+        raise SolverError(
+            f"ic array length {ic_arr.shape} does not match n_x={n_x}."
+        )
+
     # Preconsolidation head
     h_precons = np.zeros((n_x, n_t), order='F')
     if initial_precons and initial_condition_precons is not None:
         h_precons[:, 0] = initial_condition_precons
         logger.info("  Using preset preconsolidation stress.")
     else:
-        h_precons[:, 0] = ic
+        h_precons[:, 0] = ic_arr
 
     inelastic_flag = np.zeros((n_x, n_t), dtype=bool, order='F')
 
     # Initialise head vector and output matrix
-    h = ic * np.ones(n_x)
+    h = ic_arr.copy()
     h[0] = bc[0, 0]
     h[-1] = bc[1, 0]
 
@@ -585,7 +597,7 @@ def solve_head_equation_cn_elastic_inelastic(
     dx: float,
     x: np.ndarray,
     bc: np.ndarray,
-    ic: float,
+    ic: float | np.ndarray,
     k_elastic: float,
     k_inelastic: float,
     overburden_stress: bool = False,
@@ -613,8 +625,11 @@ def solve_head_equation_cn_elastic_inelastic(
         1-D array of spatial node positions, shape ``(n_x,)``.
     bc : np.ndarray
         Boundary conditions, shape ``(2, n_t)``.
-    ic : float
-        Scalar initial condition.
+    ic : float or np.ndarray
+        Initial condition.  Either a scalar applied uniformly across
+        all nodes, or a 1-D array of shape ``(n_x,)`` giving per-node
+        initial heads (e.g. a linear equilibrium profile between two
+        boundary aquifer heads for an aquitard).
     k_elastic : float
         Elastic diffusivity.
     k_inelastic : float
@@ -654,18 +669,27 @@ def solve_head_equation_cn_elastic_inelastic(
     logger.info("  k_elastic=%.6g  r_elastic=%.6g", k_elastic, r_elastic)
     logger.info("  k_inelastic=%.6g  r_inelastic=%.6g", k_inelastic, r_inelastic)
 
+    # Normalise ic to a per-node array
+    ic_arr = np.asarray(ic, dtype=float)
+    if ic_arr.ndim == 0:
+        ic_arr = np.full(n_x, float(ic_arr))
+    elif ic_arr.shape != (n_x,):
+        raise SolverError(
+            f"ic array length {ic_arr.shape} does not match n_x={n_x}."
+        )
+
     # Preconsolidation head
     h_precons = np.zeros((n_x, n_t), order='F')
     if initial_precons and initial_condition_precons is not None:
         h_precons[:, 0] = initial_condition_precons
         logger.info("  Using preset preconsolidation stress.")
     else:
-        h_precons[:, 0] = ic
+        h_precons[:, 0] = ic_arr
 
     inelastic_flag = np.zeros((n_x, n_t), dtype=bool, order='F')
 
     # Initialise
-    h = ic * np.ones(n_x)
+    h = ic_arr.copy()
     h[0] = bc[0, 0]
     h[-1] = bc[1, 0]
 
@@ -777,7 +801,8 @@ def solve_compaction_elastic_inelastic(
     endnodes: bool = False,
     preset_precons: bool = False,
     ic_precons: Optional[np.ndarray] = None,
-) -> tuple[np.ndarray, np.ndarray]:
+    stress_offset: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute elastic-inelastic compaction from a solved head field.
 
     Parameters
@@ -919,6 +944,7 @@ def solve_compaction_elastic_inelastic(
     else:
         stress_midpoints_precons[:, 0] = (
             overburden_data_midpoints[:, 0] - hmat_midpoints[:, 0]
+            + stress_offset
         )
 
     # Vectorised loop: iterate over time, but vectorise over space
@@ -955,7 +981,7 @@ def solve_compaction_elastic_inelastic(
     b[0] = 0.0
 
     logger.info("Compaction solver complete.")
-    return b, inelastic_flag_midpoints
+    return b, inelastic_flag_midpoints, stress_midpoints_precons
 
 
 # =========================================================================

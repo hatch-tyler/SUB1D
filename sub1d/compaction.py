@@ -15,6 +15,8 @@ import pandas as pd
 import scipy.interpolate
 import matplotlib.dates as mdates
 
+from sub1d.config import ModelConfig
+from sub1d.layers import Stratigraphy
 from sub1d.solver import solve_compaction_elastic_inelastic
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ def solve_layer_compaction_aquifer(
     preset_precons: bool,
     initial_condition_precons: Dict[str, np.ndarray],
     unconfined_aquifer_name: Optional[str],
+    stress_offset: float = 0.0,
 ) -> Dict[str, Any]:
     """Compute compaction for an aquifer layer with interbedded clays.
 
@@ -199,7 +202,7 @@ def solve_layer_compaction_aquifer(
             else:
                 overburden_data_tmp = overburden_data
 
-            b_tmp, inelastic_flag_tmp = solve_compaction_elastic_inelastic(
+            b_tmp, inelastic_flag_tmp, precons_tmp = solve_compaction_elastic_inelastic(
                 hmat_clay,
                 (clay_Sse - compressibility_of_water),
                 (clay_Ssv - compressibility_of_water),
@@ -210,9 +213,10 @@ def solve_layer_compaction_aquifer(
                 endnodes=compaction_solver_debug_include_endnodes,
                 preset_precons=preset_precons,
                 ic_precons=initial_condition_precons[clay_key],
+                stress_offset=stress_offset,
             )
         else:
-            b_tmp, inelastic_flag_tmp = solve_compaction_elastic_inelastic(
+            b_tmp, inelastic_flag_tmp, precons_tmp = solve_compaction_elastic_inelastic(
                 hmat_clay,
                 (clay_Sse - compressibility_of_water),
                 (clay_Ssv - compressibility_of_water),
@@ -220,6 +224,7 @@ def solve_layer_compaction_aquifer(
                 endnodes=compaction_solver_debug_include_endnodes,
                 preset_precons=preset_precons,
                 ic_precons=initial_condition_precons[clay_key],
+                stress_offset=stress_offset,
             )
 
         # Multiply single-interbed deformation by the number of interbeds
@@ -227,6 +232,43 @@ def solve_layer_compaction_aquifer(
             interbeds_distributions[thickness] * b_tmp
         )
         inelastic_flags[f"elastic_{thickness:.2f} clays"] = inelastic_flag_tmp
+
+        # Per-thickness critical head: store both the depth-mean
+        # (across the local interbed nodes) and the center-node series.
+        # critical_head = overburden_head - preconsolidation_stress, where
+        # the stress is evaluated either as the mean across midpoints or
+        # at the center midpoint (slowest-responding interior point of
+        # the clay slab; dewatering this node implies the entire slab is
+        # in the inelastic regime).
+        if overburden_stress_compaction:
+            ob_head_tmp = (1.0 / (rho_w * g)) * np.array(overburden_data_tmp)
+        else:
+            ob_head_tmp = np.zeros(precons_tmp.shape[1])
+        precons_mean_t = precons_tmp.mean(axis=0)
+        center_idx = precons_tmp.shape[0] // 2
+        precons_center_t = precons_tmp[center_idx, :]
+        deformation[f"critical_head_mean_{thickness:.2f} clays"] = (
+            ob_head_tmp - precons_mean_t
+        )
+        deformation[f"critical_head_center_{thickness:.2f} clays"] = (
+            ob_head_tmp - precons_center_t
+        )
+
+        # Keep last precons and overburden for backward-compatible
+        # layer-level mean output.
+        last_precons = precons_tmp
+        last_ob_head = ob_head_tmp if overburden_stress_compaction else None
+
+    # Layer-level mean critical head (preserves prior behaviour: uses
+    # the *last* interbed thickness solved -- typically the largest --
+    # for the layer-aggregated series).
+    if bed_thicknesses:
+        precons_mean = last_precons.mean(axis=0)  # (n_t,)
+        if last_ob_head is not None:
+            critical_head_mean = last_ob_head - precons_mean
+        else:
+            critical_head_mean = -precons_mean
+        deformation["critical_head_mean"] = critical_head_mean
 
     # ----- Collect results at the output time-step -----
     # head_ic is the "Interconnected matrix" array [date, head]; column 0
@@ -240,12 +282,12 @@ def solve_layer_compaction_aquifer(
         t_total_tmp_list.append(t_total_tmp_list[-1] + increment)
     t_total_tmp = np.array(t_total_tmp_list)
 
-    # Interconnected matrix at the output times
+    # Resample the Interconnected matrix and per-bed clay deformation
+    # series onto the output (head-data) grid before any aggregation.
     row_indices = np.where(np.isin(head_ic[:, 0], t_total_tmp))[0]
-    def_tot_tmp = np.zeros_like(t_total_tmp, dtype=float)
-    def_tot_tmp += deformation["Interconnected matrix"][row_indices]
+    ic_on_output = deformation["Interconnected matrix"][row_indices]
 
-    # Add clay interbed deformation (resampled to the output grid)
+    clay_on_output: Dict[str, np.ndarray] = {}
     for thickness in bed_thicknesses:
         clay_times = 0.0001 * np.arange(
             10000 * np.min(head_ic[:, 0]),
@@ -253,8 +295,39 @@ def solve_layer_compaction_aquifer(
             10000 * dt_master,
         )
         in_output = np.isin(clay_times, t_total_tmp)
-        clay_def = np.array(deformation[f"total_{thickness:.2f} clays"])[in_output]
-        def_tot_tmp += clay_def
+        clay_on_output[f"total_{thickness:.2f} clays"] = np.array(
+            deformation[f"total_{thickness:.2f} clays"]
+        )[in_output]
+
+    # Apply step-change thickness scaling. For aquifers with growing
+    # thickness, incremental compaction in each period is rescaled by
+    # period_thickness / initial_thickness to reflect additional sand
+    # and interbed clay entering the compactable column over time.
+    # Mirrors the production model (Lees et al. 2022, 1DSubsidenceModel.py
+    # post-processing block). Constant-thickness layers pass through.
+    if layer_thickness_type == "step_changes":
+        logger.info(
+            "\tScaling sublayer outputs of %s by temporally varying "
+            "layer thickness.", layer_name,
+        )
+        ic_on_output = scale_by_varying_thickness(
+            ic_on_output, layer_thickness, initial_thickness, t_total_tmp,
+        )
+        for key in list(clay_on_output.keys()):
+            clay_on_output[key] = scale_by_varying_thickness(
+                clay_on_output[key], layer_thickness,
+                initial_thickness, t_total_tmp,
+            )
+        # Replace the per-bed and IC entries in `deformation` with the
+        # scaled, output-grid versions so downstream code observes the
+        # same series that the totalisation uses.
+        deformation["Interconnected matrix"] = ic_on_output
+        for key, scaled in clay_on_output.items():
+            deformation[key] = scaled
+
+    def_tot_tmp = np.array(ic_on_output, dtype=float).copy()
+    for key in clay_on_output:
+        def_tot_tmp = def_tot_tmp + clay_on_output[key]
 
     deformation["total"] = np.array([t_total_tmp, def_tot_tmp])
     deformation["inelastic_flags"] = inelastic_flags
@@ -283,6 +356,7 @@ def solve_layer_compaction_aquitard(
     preset_precons: bool,
     initial_condition_precons: np.ndarray,
     unconfined_aquifer_name: Optional[str],
+    stress_offset: float = 0.0,
 ) -> Dict[str, Any]:
     """Compute compaction for a single aquitard layer.
 
@@ -352,7 +426,7 @@ def solve_layer_compaction_aquitard(
         else:
             overburden_data_tmp = overburden_data
 
-        totdeftmp, inelastic_flag_tmp = solve_compaction_elastic_inelastic(
+        totdeftmp, inelastic_flag_tmp, precons_tmp = solve_compaction_elastic_inelastic(
             head_series,
             (clay_Sse - compressibility_of_water),
             (clay_Ssv - compressibility_of_water),
@@ -362,19 +436,35 @@ def solve_layer_compaction_aquitard(
             overburden_data=(1.0 / (rho_w * g)) * np.array(overburden_data_tmp),
             preset_precons=preset_precons,
             ic_precons=initial_condition_precons,
+            stress_offset=stress_offset,
         )
     else:
-        totdeftmp, inelastic_flag_tmp = solve_compaction_elastic_inelastic(
+        totdeftmp, inelastic_flag_tmp, precons_tmp = solve_compaction_elastic_inelastic(
             head_series,
             (clay_Sse - compressibility_of_water),
             (clay_Ssv - compressibility_of_water),
             dz_clays,
             preset_precons=preset_precons,
             ic_precons=initial_condition_precons,
+            stress_offset=stress_offset,
         )
 
     deformation["total"] = np.array([groundwater_solution_dates, totdeftmp])
     deformation["inelastic_flag"] = inelastic_flag_tmp
+
+    # Critical head timeseries (mean across the aquitard's depth, and at
+    # the center node).  critical_head = overburden_head - preconsolidation
+    # stress, with stress evaluated as the depth-mean of midpoint values
+    # or at the center midpoint.
+    if overburden_stress_compaction:
+        ob_head = (1.0 / (rho_w * g)) * np.array(overburden_data_tmp)
+    else:
+        ob_head = np.zeros(precons_tmp.shape[1])
+    precons_mean = precons_tmp.mean(axis=0)
+    center_idx = precons_tmp.shape[0] // 2
+    precons_center = precons_tmp[center_idx, :]
+    deformation["critical_head_mean"] = ob_head - precons_mean
+    deformation["critical_head_center"] = ob_head - precons_center
 
     return deformation
 
@@ -384,61 +474,28 @@ def solve_layer_compaction_aquitard(
 # ---------------------------------------------------------------------------
 
 def solve_all_compaction(
-    config: Dict[str, Any],
-    stratigraphy: Dict[str, Any],
+    config: ModelConfig,
+    strat: Stratigraphy,
     head_solutions: Dict[str, Any],
-    head_data: Dict[str, Any],
-    effective_stress: Dict[str, Any],
     groundwater_solution_dates: Dict[str, Any],
-    inelastic_flag: Dict[str, Any],
     initial_condition_precons: Dict[str, Any],
     overburden_dates: Optional[np.ndarray] = None,
     overburden_data: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Iterate over all compactable layers and solve compaction.
 
-    This is the top-level entry point that replaces the inline compaction
-    solver block in model.py.
-
     Parameters
     ----------
-    config : dict
-        Model configuration with at least the following keys:
-
-        * ``"layer_names"`` -- ordered list of layer names.
-        * ``"layer_types"`` -- ``{name: "Aquifer"|"Aquitard"}``.
-        * ``"layer_compaction_switch"`` -- ``{name: bool}``.
-        * ``"layer_thickness_types"`` -- ``{name: str}``.
-        * ``"layer_thicknesses"`` -- ``{name: float|dict}``.
-        * ``"interbeds_distributions"`` -- ``{name: {thickness: count}}``.
-        * ``"sand_Sse"`` -- ``{name: float}``.
-        * ``"clay_Sse"`` -- ``{name: float}``.
-        * ``"clay_Ssv"`` -- ``{name: float}``.
-        * ``"compressibility_of_water"`` -- float.
-        * ``"dz_clays"`` -- ``{name: float}``.
-        * ``"dt_master"`` -- ``{name: float}``.
-        * ``"rho_w"`` -- float.
-        * ``"g"`` -- float.
-        * ``"overburden_stress_compaction"`` -- bool.
-        * ``"compaction_solver_debug_include_endnodes"`` -- bool.
-        * ``"MODE"`` -- ``"Normal"`` or ``"resume"``.
-        * ``"unconfined_aquifer_name"`` -- str or None.
-    stratigraphy : dict
-        May carry ``"initial_thicknesses"`` for variable-thickness layers.
+    config : ModelConfig
+        Model configuration object.
+    strat : Stratigraphy
+        Stratigraphy object with layer metadata and thickness data.
     head_solutions : dict
         ``{layer_name: head_series_data}`` -- for aquifers this is a dict
         with ``"Interconnected matrix"`` and ``"{thickness:.2f} clays"``
         keys; for aquitards it is a head matrix (nodes x time).
-    head_data : dict
-        Raw head data ``{layer_name: np.ndarray}`` with columns
-        ``[date, head]``.
-    effective_stress : dict
-        Effective stress arrays (not directly used in compaction maths but
-        passed through for completeness).
     groundwater_solution_dates : dict
         Date-number arrays for each layer/sub-layer.
-    inelastic_flag : dict
-        Existing inelastic flag arrays (populated as a side effect).
     initial_condition_precons : dict
         Initial preconsolidation arrays for each layer/sub-layer.
     overburden_dates : np.ndarray, optional
@@ -453,89 +510,81 @@ def solve_all_compaction(
         is the return value of :func:`solve_layer_compaction_aquifer` or
         :func:`solve_layer_compaction_aquitard`.
     """
-    layer_names = config["layer_names"]
-    layer_types = config["layer_types"]
-    layer_compaction_switch = config["layer_compaction_switch"]
-    layer_thickness_types = config["layer_thickness_types"]
-    layer_thicknesses = config["layer_thicknesses"]
-    interbeds_distributions = config["interbeds_distributions"]
-    sand_Sse = config["sand_Sse"]
-    clay_Sse = config["clay_Sse"]
-    clay_Ssv = config["clay_Ssv"]
-    compressibility_of_water = config["compressibility_of_water"]
-    dz_clays = config["dz_clays"]
-    dt_master = config["dt_master"]
-    rho_w = config["rho_w"]
-    g_val = config["g"]
-    overburden_stress_compaction = config["overburden_stress_compaction"]
-    debug_endnodes = config["compaction_solver_debug_include_endnodes"]
-    mode = config.get("MODE", "Normal")
-    unconfined_aquifer_name = config.get("unconfined_aquifer_name", None)
+    layer_compaction_switch = strat.layer_compaction_switch
+    initial_thicknesses = strat.initial_thicknesses
 
-    initial_thicknesses = stratigraphy.get("initial_thicknesses", {})
-
-    preset_precons = (mode == "resume")
+    preset_precons = (config.mode == "resume")
+    unconfined_aquifer_name = (
+        config.layer_names[0] if config.overburden_stress_gwflow else None
+    )
 
     deformation: Dict[str, Any] = {}
 
-    for layer in layer_names:
+    # Get per-layer stress offset (default to empty dict if not set)
+    stress_offsets = config.initial_stress_offset or {}
+
+    for layer in config.layer_names:
         if not layer_compaction_switch.get(layer, False):
             continue
 
-        if layer_types[layer] == "Aquifer":
+        layer_offset = stress_offsets.get(layer, 0.0)
+
+        if config.layer_types[layer] == "Aquifer":
             logger.info("%s is an Aquifer. Solving for layer compaction.", layer)
 
-            # Determine initial thickness for this layer
-            if layer_thickness_types[layer] == "step_changes":
+            thickness_type = strat.layer_thickness_type(layer)
+            if thickness_type == "step_changes":
                 init_thick = initial_thicknesses[layer]
             else:
-                init_thick = layer_thicknesses[layer]
+                init_thick = strat.layer_thickness(layer)
 
             deformation[layer] = solve_layer_compaction_aquifer(
                 layer_name=layer,
                 head_series=head_solutions[layer],
-                interbeds_distributions=interbeds_distributions[layer],
-                sand_Sse=sand_Sse[layer],
-                compressibility_of_water=compressibility_of_water,
-                layer_thickness=layer_thicknesses[layer],
-                layer_thickness_type=layer_thickness_types[layer],
+                interbeds_distributions=strat.get_interbeds_distribution(layer),
+                sand_Sse=config.hydro.sand_Sse[layer],
+                compressibility_of_water=config.hydro.compressibility_of_water,
+                layer_thickness=strat.layer_thickness(layer),
+                layer_thickness_type=thickness_type,
                 initial_thickness=init_thick,
-                clay_Sse=clay_Sse[layer],
-                clay_Ssv=clay_Ssv[layer],
-                dz_clays=dz_clays[layer],
-                dt_master=dt_master[layer],
+                clay_Sse=config.hydro.clay_Sse[layer],
+                clay_Ssv=config.hydro.clay_Ssv[layer],
+                dz_clays=config.solver.dz_clays[layer],
+                dt_master=config.solver.dt_master[layer],
                 groundwater_solution_dates=groundwater_solution_dates[layer],
-                overburden_stress_compaction=overburden_stress_compaction,
+                overburden_stress_compaction=config.overburden_stress_compaction,
                 overburden_dates=overburden_dates,
                 overburden_data=overburden_data,
-                rho_w=rho_w,
-                g=g_val,
-                compaction_solver_debug_include_endnodes=debug_endnodes,
+                rho_w=config.hydro.rho_w,
+                g=config.hydro.g,
+                compaction_solver_debug_include_endnodes=config.compaction_solver_debug_include_endnodes,
                 preset_precons=preset_precons,
                 initial_condition_precons=initial_condition_precons[layer],
                 unconfined_aquifer_name=unconfined_aquifer_name,
+                stress_offset=layer_offset,
             )
 
-        elif layer_types[layer] == "Aquitard":
+        elif config.layer_types[layer] == "Aquitard":
             logger.info("%s is an Aquitard. Solving for layer compaction.", layer)
 
             deformation[layer] = solve_layer_compaction_aquitard(
                 layer_name=layer,
                 head_series=head_solutions[layer],
-                clay_Sse=clay_Sse[layer],
-                clay_Ssv=clay_Ssv[layer],
-                compressibility_of_water=compressibility_of_water,
-                dz_clays=dz_clays[layer],
+                clay_Sse=config.hydro.clay_Sse[layer],
+                clay_Ssv=config.hydro.clay_Ssv[layer],
+                compressibility_of_water=config.hydro.compressibility_of_water,
+                dz_clays=config.solver.dz_clays[layer],
                 groundwater_solution_dates=groundwater_solution_dates[layer],
-                overburden_stress_compaction=overburden_stress_compaction,
+                overburden_stress_compaction=config.overburden_stress_compaction,
                 overburden_dates=overburden_dates,
                 overburden_data=overburden_data,
-                rho_w=rho_w,
-                g=g_val,
-                compaction_solver_debug_include_endnodes=debug_endnodes,
+                rho_w=config.hydro.rho_w,
+                g=config.hydro.g,
+                compaction_solver_debug_include_endnodes=config.compaction_solver_debug_include_endnodes,
                 preset_precons=preset_precons,
                 initial_condition_precons=initial_condition_precons[layer],
                 unconfined_aquifer_name=unconfined_aquifer_name,
+                stress_offset=layer_offset,
             )
 
     return deformation

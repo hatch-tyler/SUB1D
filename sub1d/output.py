@@ -427,7 +427,6 @@ def _save_aquifer_head_outputs(
 # ===================================================================== #
 
 def save_compaction_outputs(
-    deformation_output: dict,
     deformation: dict,
     layer_names: list,
     layer_types: dict,
@@ -437,18 +436,12 @@ def save_compaction_outputs(
 ) -> None:
     """Save all compaction-related outputs.
 
-    For each layer whose compaction switch is enabled:
-
-    * A total-deformation CSV summary (from a :class:`pandas.DataFrame`)
-      is always written.
-    * If ``save_s`` is *True*, the raw deformation array for aquitard
-      layers is saved via :func:`save_array`.
+    For each layer whose compaction switch is enabled, if ``save_s`` is
+    *True*, the raw deformation array for aquitard layers is saved via
+    :func:`save_array`.
 
     Parameters
     ----------
-    deformation_output : dict
-        Mapping of layer name to a :class:`pandas.DataFrame` containing
-        total deformation results.
     deformation : dict
         Mapping of layer name to a dict whose ``"total"`` key holds the
         raw deformation :class:`numpy.ndarray`.
@@ -473,18 +466,132 @@ def save_compaction_outputs(
 
         layer_safe = layer.replace(" ", "_")
 
-        if layer in deformation_output:
-            deformation_output[layer].to_csv(
-                os.path.join(
-                    outdestination,
-                    f"{layer}_Total_Deformation_Out.csv",
-                ),
-                index=False,
-            )
-
         if save_s and layer in deformation:
             if layer_types[layer] == "Aquitard":
                 save_array(
                     deformation[layer]["total"],
                     os.path.join(outdestination, f"{layer_safe}_s"),
                 )
+
+
+def save_critical_head_timeseries(
+    deformation: dict,
+    layer_names: list,
+    layer_compaction_switch: dict,
+    groundwater_solution_dates: dict,
+    outdestination: str,
+) -> None:
+    """Save critical-head timeseries per layer (and per interbed thickness).
+
+    For each compacting layer the file contains:
+
+    * ``<layer>_critical_head_mean`` -- depth-averaged critical head
+      across the aquitard / interbed midpoints.
+    * ``<layer>_critical_head_center`` -- critical head at the
+      center midpoint, the slowest-responding interior point.
+
+    For aquifer layers with multiple interbed thicknesses, additional
+    columns ``<layer>_<thickness>m_critical_head_mean`` and
+    ``<layer>_<thickness>m_critical_head_center`` are emitted, one
+    pair per thickness.
+
+    Parameters
+    ----------
+    deformation : dict
+        ``{layer_name: deformation_dict}`` whose deformation_dict may
+        contain ``critical_head_mean`` / ``critical_head_center``
+        (aquitards) or ``critical_head_{mean,center}_<thickness:.2f}
+        clays`` (aquifer interbeds).
+    layer_names : list
+        Ordered layer names.
+    layer_compaction_switch : dict
+        ``{layer_name: bool}`` flags.
+    groundwater_solution_dates : dict
+        Date arrays per layer.
+    outdestination : str
+        Output directory path.
+    """
+    import pandas as pd
+    import matplotlib.dates as mdates
+
+    # Each (layer, thickness) series lives on its own per-bed time grid
+    # (dt_master spacing for aquifer interbeds, dt_master for aquitards).
+    # Different layers use different dt_master values, so we collect
+    # each series with its own date index and merge on the intersection
+    # at write time.  This is the same coarsest-common-grid logic used
+    # by aggregate_deformation().
+    series_by_col: dict[str, "pd.Series"] = {}
+
+    def _series(values, dates_num):
+        idx = pd.to_datetime([d for d in mdates.num2date(dates_num)]).tz_localize(None)
+        return pd.Series(values, index=idx)
+
+    for layer in layer_names:
+        if not layer_compaction_switch.get(layer, False):
+            continue
+        if layer not in deformation:
+            continue
+
+        layer_dates = groundwater_solution_dates.get(layer)
+        if layer_dates is None:
+            continue
+        layer_safe = layer.replace(" ", "_")
+        layer_def = deformation[layer]
+
+        # For aquifers, dates is a dict keyed by "<thickness:.2f> clays".
+        # For aquitards, dates is a single 1-D array.
+        if isinstance(layer_dates, dict):
+            dates_for_layer = next(iter(layer_dates.values()))
+        else:
+            dates_for_layer = layer_dates
+
+        for kind in ("mean", "center"):
+            key = f"critical_head_{kind}"
+            ch = layer_def.get(key)
+            if ch is None or len(ch) != len(dates_for_layer):
+                continue
+            series_by_col[f"{layer_safe}_critical_head_{kind}"] = _series(
+                ch, dates_for_layer
+            )
+
+        # Per-interbed-thickness series (aquifers).  Each thickness has
+        # its own date grid stored under that "<thickness:.2f> clays"
+        # key in groundwater_solution_dates.
+        if isinstance(layer_dates, dict):
+            for key, ch in layer_def.items():
+                if not isinstance(key, str) or not key.startswith("critical_head_"):
+                    continue
+                parts = key.split("_", 3)
+                if len(parts) != 4:
+                    continue
+                _, _, kind, tail = parts
+                if kind not in ("mean", "center") or not tail.endswith(" clays"):
+                    continue
+                thick_str = tail[:-len(" clays")]
+                try:
+                    thickness = float(thick_str)
+                except ValueError:
+                    continue
+                bed_dates = layer_dates.get(f"{thickness:.2f} clays")
+                if bed_dates is None or len(ch) != len(bed_dates):
+                    continue
+                col = f"{layer_safe}_{thickness:.2f}m_critical_head_{kind}"
+                series_by_col[col] = _series(ch, bed_dates)
+
+    if not series_by_col:
+        return
+
+    # Merge on the common date intersection (asof to nearest is overkill;
+    # the per-layer grids share the same head-data base dates so an inner
+    # concat picks up the matching rows).
+    df = pd.concat(series_by_col, axis=1).dropna(how="any")
+    df.index.name = "dates"
+    df = df.reset_index()
+    df["dates"] = df["dates"].dt.strftime("%d-%b-%Y")
+
+    path = os.path.join(outdestination, "critical_head_timeseries.csv")
+    df.to_csv(path, index=False)
+    logger.info(
+        "Saved critical head timeseries: %s (%d cols, %d rows)",
+        path, len(df.columns) - 1, len(df),
+    )

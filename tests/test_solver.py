@@ -319,7 +319,7 @@ class TestCompactionSolver:
         Sske = 1e-4
         Sskv = 1e-3
 
-        b, ifl = solve_compaction_elastic_inelastic(
+        b, ifl, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
         )
 
@@ -339,7 +339,7 @@ class TestCompactionSolver:
         Sske = 1e-4
         Sskv = 1e-3
 
-        b, ifl = solve_compaction_elastic_inelastic(
+        b, ifl, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
         )
 
@@ -353,9 +353,50 @@ class TestCompactionSolver:
         dz = 0.5
 
         hmat = np.ones((n_nodes, n_times)) * 10.0
-        b, ifl = solve_compaction_elastic_inelastic(hmat, 1e-4, 1e-3, dz)
+        b, ifl, _ = solve_compaction_elastic_inelastic(hmat, 1e-4, 1e-3, dz)
 
         assert b.shape == (n_times,)
+
+    def test_stress_offset_delays_inelastic(self):
+        """Positive stress_offset should delay onset of inelastic compaction."""
+        n_nodes = 11
+        n_times = 200
+        dz = 0.5
+        Sske = 1e-4
+        Sskv = 1e-3
+
+        # Head declining: stress increases, triggers inelastic at some point
+        hmat = np.ones((n_nodes, n_times)) * 50.0
+        for j in range(n_times):
+            hmat[:, j] = 50.0 - 10.0 * j / n_times
+
+        # Without offset
+        b_no_offset, ifl_no, _ = solve_compaction_elastic_inelastic(
+            hmat, Sske, Sskv, dz, stress_offset=0.0,
+        )
+
+        # With positive offset: raises preconsolidation, so more head decline
+        # needed before inelastic kicks in -> less total compaction
+        b_with_offset, ifl_off, _ = solve_compaction_elastic_inelastic(
+            hmat, Sske, Sskv, dz, stress_offset=5.0,
+        )
+
+        # The offset case should have less (or equal) inelastic compaction
+        # because the preconsolidation stress is higher
+        assert abs(b_with_offset[-1]) <= abs(b_no_offset[-1]) + 1e-12
+
+    def test_stress_offset_returns_precons(self):
+        """Solver should return preconsolidation stress array."""
+        n_nodes = 11
+        n_times = 50
+        dz = 0.5
+
+        hmat = np.ones((n_nodes, n_times)) * 10.0
+        _, _, precons = solve_compaction_elastic_inelastic(hmat, 1e-4, 1e-3, dz)
+
+        # precons has shape (n_midpoints, n_times)
+        assert precons.ndim == 2
+        assert precons.shape[1] == n_times
 
 
 class TestFortranOrderArrays:

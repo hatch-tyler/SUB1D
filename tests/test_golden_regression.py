@@ -359,7 +359,7 @@ class TestGoldenCompactionSolver:
         b_legacy, ifl_legacy = legacy.subsidence_solver_aquitard_elasticinelastic(
             hmat, Sske, Sskv, dz,
         )
-        b_new, ifl_new = solve_compaction_elastic_inelastic(
+        b_new, ifl_new, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
         )
 
@@ -384,7 +384,7 @@ class TestGoldenCompactionSolver:
         b_legacy, ifl_legacy = legacy.subsidence_solver_aquitard_elasticinelastic(
             hmat, Sske, Sskv, dz,
         )
-        b_new, ifl_new = solve_compaction_elastic_inelastic(
+        b_new, ifl_new, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
         )
 
@@ -407,7 +407,7 @@ class TestGoldenCompactionSolver:
         _, ifl_legacy = legacy.subsidence_solver_aquitard_elasticinelastic(
             hmat, Sske, Sskv, dz,
         )
-        _, ifl_new = solve_compaction_elastic_inelastic(
+        _, ifl_new, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
         )
 
@@ -431,7 +431,7 @@ class TestGoldenCompactionSolver:
             hmat, Sske, Sskv, dz,
             overburden=True, overburden_data=ob,
         )
-        b_new, _ = solve_compaction_elastic_inelastic(
+        b_new, _, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
             overburden=True, overburden_data=ob,
         )
@@ -457,7 +457,7 @@ class TestGoldenCompactionSolver:
             hmat, Sske, Sskv, dz,
             preset_precons=True, ic_precons=ic_precons,
         )
-        b_new, _ = solve_compaction_elastic_inelastic(
+        b_new, _, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
             preset_precons=True, ic_precons=ic_precons,
         )
@@ -481,7 +481,7 @@ class TestGoldenCompactionSolver:
         b_legacy, _ = legacy.subsidence_solver_aquitard_elasticinelastic(
             hmat, Sske, Sskv, dz, endnodes=True,
         )
-        b_new, _ = solve_compaction_elastic_inelastic(
+        b_new, _, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz, endnodes=True,
         )
 
@@ -505,7 +505,7 @@ class TestGoldenCompactionSolver:
         b_legacy, ifl_legacy = legacy.subsidence_solver_aquitard_elasticinelastic(
             hmat, Sske, Sskv, dz,
         )
-        b_new, ifl_new = solve_compaction_elastic_inelastic(
+        b_new, ifl_new, _ = solve_compaction_elastic_inelastic(
             hmat, Sske, Sskv, dz,
         )
 
@@ -555,7 +555,7 @@ class TestGoldenFullPipeline:
 
         # New pipeline
         hmat_new = solve_head_equation_single(dt, t, dx, x, bc, ic, k)
-        b_new, ifl_new = solve_compaction_elastic_inelastic(
+        b_new, ifl_new, _ = solve_compaction_elastic_inelastic(
             hmat_new, Sske, Sskv, dx,
         )
 
@@ -600,7 +600,7 @@ class TestGoldenFullPipeline:
         )
 
         # New pipeline (use legacy hmat to isolate compaction comparison)
-        b_new_from_legacy_hmat, _ = solve_compaction_elastic_inelastic(
+        b_new_from_legacy_hmat, _, _ = solve_compaction_elastic_inelastic(
             hmat_legacy, Sske, Sskv, dx,
         )
 
@@ -623,7 +623,7 @@ class TestGoldenFullPipeline:
         # Full new pipeline compaction should be very close.  The small
         # difference at the last timestep of hmat (from the off-by-one fix)
         # propagates into a ~2e-5 compaction difference at the last step.
-        b_new, _ = solve_compaction_elastic_inelastic(hmat_new, Sske, Sskv, dx)
+        b_new, _, _ = solve_compaction_elastic_inelastic(hmat_new, Sske, Sskv, dx)
         np.testing.assert_allclose(
             b_new, b_legacy, atol=1e-4,
             err_msg="Pipeline: end-to-end compaction too different",

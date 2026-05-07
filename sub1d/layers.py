@@ -31,7 +31,7 @@ Or from a ``ModelConfig`` object::
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,8 @@ class Stratigraphy:
         layer_compaction_switch: dict[str, bool],
         interbeds_switch: dict[str, bool],
         interbeds_distributions: dict[str, dict] | None = None,
+        layer_thicknesses: dict[str, Any] | None = None,
+        layer_thickness_types: dict[str, str] | None = None,
     ) -> None:
         self._layer_names: list[str] = list(layer_names)
         self._layer_types: dict[str, str] = dict(layer_types)
@@ -110,6 +112,8 @@ class Stratigraphy:
         self._interbeds_distributions: dict[str, dict] = dict(
             interbeds_distributions or {}
         )
+        self._layer_thicknesses: dict[str, Any] = dict(layer_thicknesses or {})
+        self._layer_thickness_types: dict[str, str] = dict(layer_thickness_types or {})
         self._validate()
         logger.info(
             "Stratigraphy initialised with %d layers (%d aquifers, %d aquitards).",
@@ -474,6 +478,43 @@ class Stratigraphy:
         """
         return self._interbeds_switch.get(layer, False)
 
+    @property
+    def layer_compaction_switch(self) -> dict[str, bool]:
+        """Return the compaction switch mapping for all layers."""
+        return dict(self._layer_compaction_switch)
+
+    def layer_thickness(self, name: str) -> Any:
+        """Return the thickness for a layer (float or dict of period thicknesses)."""
+        return self._layer_thicknesses[name]
+
+    def layer_thickness_type(self, name: str) -> str:
+        """Return the thickness type for a layer ('constant' or 'step_changes')."""
+        return self._layer_thickness_types[name]
+
+    @property
+    def initial_thicknesses(self) -> dict[str, float]:
+        """Return initial thicknesses for all layers.
+
+        For ``step_changes`` layers, extracts the ``"pre-"`` value.
+        For ``constant`` layers, returns the scalar thickness.
+        """
+        result: dict[str, float] = {}
+        for name in self._layer_names:
+            if name not in self._layer_thicknesses:
+                continue
+            th = self._layer_thicknesses[name]
+            th_type = self._layer_thickness_types.get(name, "constant")
+            if th_type == "step_changes" and isinstance(th, dict):
+                for key, val in th.items():
+                    if "pre" in str(key):
+                        result[name] = float(val)
+                        break
+                else:
+                    result[name] = float(list(th.values())[0])
+            else:
+                result[name] = float(th)
+        return result
+
     # ------------------------------------------------------------------
     # Alternate constructors
     # ------------------------------------------------------------------
@@ -524,6 +565,8 @@ class Stratigraphy:
                 for lc in config.layers
                 if lc.interbeds_distributions
             },
+            layer_thicknesses={lc.name: lc.thickness for lc in config.layers},
+            layer_thickness_types={lc.name: lc.thickness_type for lc in config.layers},
         )
 
     # ------------------------------------------------------------------

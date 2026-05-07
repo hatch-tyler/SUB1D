@@ -7,7 +7,6 @@ groundwater flow solution, compaction solving, and output generation.
 from __future__ import annotations
 
 import os
-import copy
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,6 +24,7 @@ from sub1d.head_io import (
     compute_overburden_stress,
     interpolate_head_series,
     apply_resume_constant_head,
+    head_df_to_arrays,
 )
 from sub1d.solver import (
     solve_head_equation_single,
@@ -38,7 +38,7 @@ from sub1d.compaction import (
     aggregate_deformation,
     scale_by_varying_thickness,
 )
-from sub1d.output import save_head_outputs, save_compaction_outputs, save_array
+from sub1d.output import save_head_outputs, save_compaction_outputs, save_array, save_critical_head_timeseries
 from sub1d.plotting import (
     plot_head_timeseries,
     plot_overburden_stress,
@@ -121,7 +121,7 @@ def run_model(config: ModelConfig,
             config.hydro.specific_yield or 0.2,
             config.hydro.rho_w, config.hydro.g,
         )
-        overburden_dates = overburden_df.iloc[:, 0]
+        overburden_dates = mdates.date2num(overburden_df.iloc[:, 0].to_numpy())
         overburden_data = overburden_df.iloc[:, 1].values
 
         input_copy = os.path.join(outdestination, "input_data")
@@ -144,6 +144,11 @@ def run_model(config: ModelConfig,
 
     t_read_elapsed = time.time() - t_read_start
     logger.info("Head data reading and processing: %.1fs", t_read_elapsed)
+
+    # --- Convert head DataFrames to numpy arrays once ---
+    head_arrays: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for aquifer, df in head_data.items():
+        head_arrays[aquifer] = head_df_to_arrays(df)
 
     # --- Plot clay distributions ---
     layer_thicknesses = {lc.name: lc.thickness for lc in config.layers}
@@ -187,13 +192,13 @@ def run_model(config: ModelConfig,
         hs, ifl, es, gwd, z_d, tg, icp = {}, {}, {}, {}, {}, {}, {}
         if strat.is_aquitard(layer):
             _solve_aquitard_head(
-                layer, config, strat, head_data, overburden_data,
+                layer, config, strat, head_arrays, overburden_data,
                 overburden_dates, unconfined_aquifer_name,
                 hs, ifl, es, gwd, z_d, tg, icp, solver_override,
             )
         elif strat.is_aquifer(layer) and strat.has_interbeds(layer):
             _solve_aquifer_interbeds_head(
-                layer, config, strat, head_data, overburden_data,
+                layer, config, strat, head_arrays, overburden_data,
                 overburden_dates, unconfined_aquifer_name,
                 hs, ifl, es, gwd, z_d, tg, icp, solver_override,
             )
@@ -249,9 +254,8 @@ def run_model(config: ModelConfig,
         t_compact_start = time.time()
 
         deformation = solve_all_compaction(
-            config, strat, head_solutions, head_data,
-            effective_stress, groundwater_solution_dates,
-            inelastic_flag, initial_condition_precons,
+            config, strat, head_solutions,
+            groundwater_solution_dates, initial_condition_precons,
             overburden_dates=overburden_dates,
             overburden_data=overburden_data,
         )
@@ -261,11 +265,27 @@ def run_model(config: ModelConfig,
         logger.info("Compaction solving: %.1fs", t_compact_elapsed)
 
         # Save compaction outputs
-        layer_compaction_switch = {lc.name: lc.compaction_switch for lc in config.layers}
+        layer_compaction_switch = strat.layer_compaction_switch
         save_compaction_outputs(
-            {}, deformation, config.layer_names, config.layer_types,
+            deformation, config.layer_names, config.layer_types,
             layer_compaction_switch, outdestination, config.output.save_s,
         )
+
+        # Save total deformation
+        agg_df = aggregate_deformation(deformation, layer_compaction_switch)
+        if not agg_df.empty:
+            agg_df.to_csv(
+                os.path.join(outdestination, "Total_Deformation_Out.csv"),
+                index=False,
+            )
+
+        # Save critical head timeseries if requested
+        if config.output.save_critical_head:
+            save_critical_head_timeseries(
+                deformation, config.layer_names,
+                layer_compaction_switch, groundwater_solution_dates,
+                outdestination,
+            )
 
     t_total = time.time() - t_total_start
     logger.info("Total model runtime: %.1f seconds", t_total)
@@ -275,7 +295,8 @@ def run_model(config: ModelConfig,
 
 def _solve_aquitard_head(
     layer: str, config: ModelConfig, strat: Stratigraphy,
-    head_data: dict, overburden_data, overburden_dates,
+    head_arrays: dict[str, tuple[np.ndarray, np.ndarray]],
+    overburden_data, overburden_dates,
     unconfined_aquifer_name: str | None,
     head_solutions: dict, inelastic_flag_dict: dict,
     effective_stress: dict, gw_dates: dict, Z: dict, t_gwflow: dict,
@@ -297,11 +318,9 @@ def _solve_aquitard_head(
     rho_w = config.hydro.rho_w
     g = config.hydro.g
 
-    # Get boundary head timeseries
-    t_top = mdates.date2num(head_data[top_boundary].iloc[:, 0].to_numpy())
-    h_top = head_data[top_boundary].iloc[:, 1].to_numpy()
-    t_bot = mdates.date2num(head_data[bot_boundary].iloc[:, 0].to_numpy())
-    h_bot = head_data[bot_boundary].iloc[:, 1].to_numpy()
+    # Get boundary head timeseries (already converted to numpy)
+    t_top, h_top = head_arrays[top_boundary]
+    t_bot, h_bot = head_arrays[bot_boundary]
 
     # Interpolate to solver timestep
     top_interp = interpolate_head_series(t_top, h_top, dt)
@@ -316,8 +335,21 @@ def _solve_aquitard_head(
     # Prepare boundary conditions
     bc = np.vstack([top_interp[:, 1], bot_interp[:, 1]])
 
-    # Initial condition
-    ic = (top_interp[0, 1] + bot_interp[0, 1]) / 2.0
+    # Initial condition: linear equilibrium profile between the two
+    # boundary aquifer heads.  This is the steady-state of the
+    # 1-D diffusion equation with two constant Dirichlet BCs and no
+    # internal sources, so it represents the aquitard at rest before
+    # any transient drawdown is applied.  A uniform IC (scalar mean
+    # of the two boundary heads, or just the top head as in legacy
+    # code) induces a spurious initial relaxation that triggers
+    # inelastic compaction artefacts when the top/bot heads differ.
+    h_top0 = float(top_interp[0, 1])
+    h_bot0 = float(bot_interp[0, 1])
+    n_z_aqt = len(z)
+    if n_z_aqt > 1:
+        ic = h_top0 + (h_bot0 - h_top0) * (np.arange(n_z_aqt) / (n_z_aqt - 1))
+    else:
+        ic = (h_top0 + h_bot0) / 2.0
     ic_precons[layer] = np.array([])
 
     # Overburden
@@ -386,7 +418,8 @@ def _solve_aquitard_head(
 
 def _solve_aquifer_interbeds_head(
     layer: str, config: ModelConfig, strat: Stratigraphy,
-    head_data: dict, overburden_data, overburden_dates,
+    head_arrays: dict[str, tuple[np.ndarray, np.ndarray]],
+    overburden_data, overburden_dates,
     unconfined_aquifer_name: str | None,
     head_solutions: dict, inelastic_flag_dict: dict,
     effective_stress: dict, gw_dates: dict, Z: dict, t_gwflow: dict,
@@ -398,7 +431,11 @@ def _solve_aquifer_interbeds_head(
     rho_w = config.hydro.rho_w
     g = config.hydro.g
 
-    head_solutions[layer] = {"Interconnected matrix": head_data[layer]}
+    # Use pre-converted numpy arrays
+    t_aquifer, h_aquifer = head_arrays[layer]
+    head_solutions[layer] = {
+        "Interconnected matrix": np.column_stack([t_aquifer, h_aquifer])
+    }
     inelastic_flag_dict[layer] = {}
     effective_stress[layer] = {}
     gw_dates[layer] = {}
@@ -409,10 +446,6 @@ def _solve_aquifer_interbeds_head(
     dist = strat.get_interbeds_distribution(layer)
     if not dist:
         return
-
-    # Get aquifer head timeseries
-    t_aquifer = mdates.date2num(head_data[layer].iloc[:, 0].to_numpy())
-    h_aquifer = head_data[layer].iloc[:, 1].to_numpy()
 
     for thickness in dist.keys():
         logger.info("  Solving interbed thickness %.2f in %s", thickness, layer)
@@ -498,18 +531,27 @@ def _get_overburden_for_layer(
     unconfined_aquifer_name: str | None,
     rho_w: float, g: float,
 ) -> np.ndarray | None:
-    """Prepare overburden data array for a specific layer's solver grid."""
+    """Prepare overburden data array for a specific layer's solver grid.
+
+    The overburden term represents the time-varying load on the
+    underlying clays due to water-table movement
+    (Sy * rho_w * g * (h - h_0)).  It is applied uniformly to all
+    layers below the water table, *including* clay interbeds within
+    the unconfined aquifer itself (which sit below the water table
+    and experience the same dewatering-driven stress change).  The
+    ``unconfined_aquifer_name`` parameter is retained for diagnostics
+    but does not change the returned series.
+    """
+    del unconfined_aquifer_name  # retained for API compatibility
     if overburden_data is None:
         return None
 
-    if layer == unconfined_aquifer_name:
-        return np.zeros_like(t_solver)
-
     # Interpolate overburden to solver timestep
     if overburden_dates is not None:
-        ob_dates_num = mdates.date2num(overburden_dates.to_numpy()) if hasattr(
-            overburden_dates, 'to_numpy') else np.asarray(overburden_dates, dtype=float)
+        ob_dates_num = np.asarray(overburden_dates, dtype=float)
         ob_vals = np.asarray(overburden_data, dtype=float)
         return (1.0 / (rho_w * g)) * np.interp(t_solver, ob_dates_num, ob_vals)
 
     return None
+
+

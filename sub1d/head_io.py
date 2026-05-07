@@ -28,6 +28,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+import matplotlib.dates as mdates
 
 from sub1d.exceptions import InputDataError
 
@@ -390,3 +391,26 @@ def apply_resume_constant_head(
                 "Set constant head for %s at %.2f", aquifer, first_val
             )
     return result
+
+
+# ---------------------------------------------------------------------------
+# DataFrame → numpy conversion
+# ---------------------------------------------------------------------------
+
+def head_df_to_arrays(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Convert a head DataFrame to (date_nums, head_values) numpy arrays.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Two-column DataFrame (dates, heads).
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(date_nums, head_values)`` where *date_nums* are matplotlib
+        date numbers and *head_values* are the corresponding head values.
+    """
+    dates_num = mdates.date2num(df.iloc[:, 0].to_numpy())
+    heads = df.iloc[:, 1].to_numpy()
+    return dates_num, heads
